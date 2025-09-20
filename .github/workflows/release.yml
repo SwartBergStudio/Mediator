@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+        - patch
+        - minor
+        - major
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+        
+    - name: Install GitVersion
+      uses: gittools/actions/gitversion/setup@v0.10.2
+      with:
+        versionSpec: '5.x'
+        
+    - name: Determine Version
+      id: gitversion
+      uses: gittools/actions/gitversion/execute@v0.10.2
+      with:
+        useConfigFile: true
+        
+    - name: Update project version
+      run: |
+        # Update the main project file
+        sed -i "s/<Version>.*<\/Version>/<Version>${{ steps.gitversion.outputs.nuGetVersionV2 }}<\/Version>/" src/Mediator.csproj
+        sed -i "s/<AssemblyVersion>.*<\/AssemblyVersion>/<AssemblyVersion>${{ steps.gitversion.outputs.assemblySemVer }}<\/AssemblyVersion>/" src/Mediator.csproj
+        sed -i "s/<FileVersion>.*<\/FileVersion>/<FileVersion>${{ steps.gitversion.outputs.assemblySemFileVer }}<\/FileVersion>/" src/Mediator.csproj
+        
+    - name: Restore dependencies
+      run: dotnet restore
+      
+    - name: Build
+      run: dotnet build --no-restore --configuration Release
+      
+    - name: Test
+      run: dotnet test --no-build --configuration Release --verbosity normal
+      
+    - name: Pack NuGet package
+      run: dotnet pack src/Mediator.csproj --no-build --configuration Release --output ./packages
+      
+    - name: Push to NuGet
+      if: env.NUGET_API_KEY != ''
+      env:
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      run: dotnet nuget push ./packages/*.nupkg --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+      
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.gitversion.outputs.nuGetVersionV2 }}
+        name: Release v${{ steps.gitversion.outputs.nuGetVersionV2 }}
+        body: |
+          ## SwartBerg.Mediator v${{ steps.gitversion.outputs.nuGetVersionV2 }}
+          
+          High-performance .NET 9 mediator with ultra-fast request processing, background notification handling, and crash-safe persistence.
+          
+          ### Key Features
+          - Ultra-fast request processing with compiled expressions
+          - Background notification processing with channels
+          - Optional persistence with file-based storage and retry logic
+          - Pipeline behaviors for cross-cutting concerns
+          - .NET 9 optimized with aggressive performance tuning
+          
+          ### Installation
+          ```bash
+          dotnet add package SwartBerg.Mediator --version ${{ steps.gitversion.outputs.nuGetVersionV2 }}
+          ```
+          
+          ### Documentation
+          - [README](https://github.com/SwartBergStudio/Mediator#readme) - Getting started and examples
+          - [Performance Benchmarks](https://github.com/SwartBergStudio/Mediator#performance-benchmarks) - Latest performance data
+          - [Contributing](https://github.com/SwartBergStudio/Mediator/blob/main/CONTRIBUTING.md) - How to contribute
+          
+          ---
+          
+          **Full Changelog**: https://github.com/SwartBergStudio/Mediator/compare/${{ steps.gitversion.outputs.versionSourceSha }}...v${{ steps.gitversion.outputs.nuGetVersionV2 }}
+        draft: false
+        prerelease: false
+        files: ./packages/*.nupkg
+        
+    - name: Upload package artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: nuget-packages
+        path: ./packages/*.nupkg

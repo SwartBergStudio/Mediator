@@ -1,0 +1,94 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[BUG] "
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug in SwartBerg.Mediator!
+        
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear description of what the bug is
+      placeholder: Describe the issue you're experiencing...
+    validations:
+      required: true
+      
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Create a mediator instance with...
+        2. Send a request...
+        3. Expected result vs actual result...
+    validations:
+      required: true
+      
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen
+      placeholder: I expected...
+    validations:
+      required: true
+      
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened
+      placeholder: Instead, I got...
+    validations:
+      required: true
+      
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Your development environment details
+      placeholder: |
+        - OS: [e.g., Windows 11, Ubuntu 22.04]
+        - .NET Version: [e.g., .NET 9.0]
+        - SwartBerg.Mediator Version: [e.g., 1.0.0]
+        - IDE: [e.g., Visual Studio 2022, VS Code]
+    validations:
+      required: true
+      
+  - type: textarea
+    id: performance
+    attributes:
+      label: Performance Impact
+      description: Is this affecting performance? Include benchmark results if applicable
+      placeholder: No performance impact / Performance decreased by X% / Benchmark results...
+      
+  - type: textarea
+    id: code
+    attributes:
+      label: Code Sample
+      description: Minimal code to reproduce the issue
+      render: csharp
+      placeholder: |
+        var services = new ServiceCollection();
+        services.AddMediator(typeof(Program).Assembly);
+        var mediator = services.BuildServiceProvider().GetService<IMediator>();
+        // Reproduce issue here...
+        
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      description: Please confirm you have done the following
+      options:
+        - label: I have searched existing issues to avoid duplicates
+          required: true
+        - label: I have provided a minimal reproduction case
+          required: true
+        - label: I have tested with the latest version
+          required: true

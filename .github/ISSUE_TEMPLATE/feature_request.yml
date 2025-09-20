@@ -1,0 +1,80 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[FEATURE] "
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new feature for SwartBerg.Mediator!
+        
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Description
+      description: What problem does this feature solve?
+      placeholder: I'm frustrated when...
+    validations:
+      required: true
+      
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: What would you like to happen?
+      placeholder: I would like to be able to...
+    validations:
+      required: true
+      
+  - type: textarea
+    id: api
+    attributes:
+      label: Proposed API
+      description: What would the API look like?
+      render: csharp
+      placeholder: |
+        // Example API design
+        services.AddMediator(options => 
+        {
+            options.NewFeature = true;
+        });
+        
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other solutions did you consider?
+      placeholder: I also considered...
+      
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Breaking Change
+      description: Would this be a breaking change?
+      options:
+        - "No - Backwards compatible"
+        - "Yes - Breaking change"
+        - "Unsure"
+    validations:
+      required: true
+      
+  - type: dropdown
+    id: performance
+    attributes:
+      label: Performance Impact
+      description: How might this affect performance?
+      options:
+        - "No performance impact"
+        - "Could improve performance"
+        - "Might decrease performance"
+        - "Unsure"
+    validations:
+      required: true
+      
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context, mockups, or examples
+      placeholder: Additional details...
