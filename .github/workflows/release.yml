@@ -13,6 +13,12 @@ on:
         - minor
         - major
 
+permissions:
+  contents: write
+  packages: write
+  issues: write
+  pull-requests: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -81,7 +87,7 @@ jobs:
       run: dotnet nuget push ./packages/*.nupkg --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
       
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ steps.gitversion.outputs.nuGetVersionV2 }}
         name: Release v${{ steps.gitversion.outputs.nuGetVersionV2 }}
@@ -113,6 +119,7 @@ jobs:
         draft: false
         prerelease: false
         files: ./packages/*.nupkg
+        token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
         
     - name: Upload package artifacts
       uses: actions/upload-artifact@v4

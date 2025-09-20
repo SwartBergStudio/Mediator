@@ -29,6 +29,11 @@
     <PackageReleaseNotes>High-performance .NET 9 mediator with compiled expressions, background notifications, pipeline behaviors, and file-based persistence with retry logic.</PackageReleaseNotes>
     <Copyright>Copyright © SwartBerg Studio 2025</Copyright>
     
+    <!-- Package ownership and trust -->
+    <PackageOwners>SwartBerg Studio</PackageOwners>
+    <RepositoryBranch>main</RepositoryBranch>
+    <RepositoryCommit></RepositoryCommit>
+    
     <!-- Source link -->
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
