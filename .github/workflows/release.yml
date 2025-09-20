@@ -54,7 +54,7 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add src/Mediator.csproj
-        git commit -m "chore: bump version to ${{ steps.gitversion.outputs.nuGetVersionV2 }} [skip ci]" || exit 0
+        git diff --cached --quiet || git commit -m "chore: bump version to ${{ steps.gitversion.outputs.nuGetVersionV2 }} [skip ci]"
         git push
         
     - name: Restore dependencies
