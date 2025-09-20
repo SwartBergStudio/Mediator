@@ -49,7 +49,7 @@ jobs:
         sed -i "s/<FileVersion>.*<\/FileVersion>/<FileVersion>${{ steps.gitversion.outputs.assemblySemFileVer }}<\/FileVersion>/" src/Mediator.csproj
         
     - name: Commit version update
-      if: secrets.PAT_TOKEN
+      if: ${{ secrets.PAT_TOKEN != '' }}
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
