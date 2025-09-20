@@ -1,8 +1,6 @@
 name: Release
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       version_bump:
@@ -25,7 +23,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
+        token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
         
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -49,6 +47,15 @@ jobs:
         sed -i "s/<Version>.*<\/Version>/<Version>${{ steps.gitversion.outputs.nuGetVersionV2 }}<\/Version>/" src/Mediator.csproj
         sed -i "s/<AssemblyVersion>.*<\/AssemblyVersion>/<AssemblyVersion>${{ steps.gitversion.outputs.assemblySemVer }}<\/AssemblyVersion>/" src/Mediator.csproj
         sed -i "s/<FileVersion>.*<\/FileVersion>/<FileVersion>${{ steps.gitversion.outputs.assemblySemFileVer }}<\/FileVersion>/" src/Mediator.csproj
+        
+    - name: Commit version update
+      if: secrets.PAT_TOKEN != ''
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add src/Mediator.csproj
+        git commit -m "chore: bump version to ${{ steps.gitversion.outputs.nuGetVersionV2 }} [skip ci]" || exit 0
+        git push
         
     - name: Restore dependencies
       run: dotnet restore
@@ -103,7 +110,7 @@ jobs:
         files: ./packages/*.nupkg
         
     - name: Upload package artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: nuget-packages
         path: ./packages/*.nupkg

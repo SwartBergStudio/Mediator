@@ -1,0 +1,18 @@
+# Global code owners - these users will be requested for review on all PRs
+* @SwartBergStudio
+
+# Core library files
+/src/ @SwartBergStudio
+
+# Documentation
+*.md @SwartBergStudio
+/docs/ @SwartBergStudio
+
+# CI/CD and build files
+/.github/ @SwartBergStudio
+*.yml @SwartBergStudio
+*.yaml @SwartBergStudio
+
+# Package and project files
+*.csproj @SwartBergStudio
+*.sln @SwartBergStudio
