@@ -10,6 +10,8 @@ A fast mediator implementation for .NET 9 with background processing and notific
 
 Inspired by MediatR, this library was created as a free alternative with similar patterns but optimized for performance and includes built-in persistence and background processing.
 
+The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of my surname and my wife's maiden name.  If you like to thank me for the library buy me a coffee.  Link is at the bottom of this readme.
+
 ## Features
 
 - **High Performance**: Uses expression trees and caching to avoid reflection overhead
@@ -302,7 +304,4 @@ If this library happens to save you time or makes your project better, and you f
 
 **Remember: This library will always be free, regardless of donations. No premium features, no paid support, no strings attached.**
 
-## Contributors
-
-Thanks to all the developers who contribute to making SwartBerg.Mediator better!
 
