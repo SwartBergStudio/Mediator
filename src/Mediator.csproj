@@ -18,15 +18,15 @@
     <Authors>SwartBerg Studio</Authors>
     <Company>SwartBerg Studio</Company>
     <Product>SwartBerg.Mediator</Product>
-    <Description>A high-performance mediator implementation for .NET 9 with built-in support for background processing and persistent notifications. Modern alternative to MediatR with advanced features like compiled expressions, aggressive performance optimizations, and crash-safe persistence.</Description>
-    <Summary>High-performance .NET 9 mediator with background processing and persistence</Summary>
-    <PackageTags>mediator;cqrs;command;query;notification;background-processing;persistence;performance;net9;high-performance;compiled-expressions</PackageTags>
+    <Description>A high-performance mediator implementation for .NET 9 with built-in support for background processing, persistent notifications, and deadlock-safe ConfigureAwait behavior by default. Modern alternative to MediatR with advanced features like compiled expressions, aggressive performance optimizations, automatic UI deadlock prevention, and crash-safe persistence.</Description>
+    <Summary>High-performance .NET 9 mediator with background processing, persistence, and built-in deadlock protection</Summary>
+    <PackageTags>mediator;cqrs;command;query;notification;background-processing;persistence;performance;net9;high-performance;compiled-expressions;configureawait;ui-safe;aot;deadlock-safe</PackageTags>
     <PackageProjectUrl>https://github.com/SwartBergStudio/Mediator</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/SwartBergStudio/Mediator.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>High-performance .NET 9 mediator with compiled expressions, background notifications, pipeline behaviors, and file-based persistence with retry logic.</PackageReleaseNotes>
+    <PackageReleaseNotes>High-performance .NET 9 mediator with compiled expressions, background notifications, pipeline behaviors, file-based persistence with retry logic, and built-in ConfigureAwait(false) for automatic deadlock prevention. Safe by default for all application types.</PackageReleaseNotes>
     <Copyright>Copyright © SwartBerg Studio 2025</Copyright>
     
     <!-- Package ownership and trust -->

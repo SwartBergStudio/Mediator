@@ -1,4 +1,4 @@
-﻿# SwartBerg.Mediator
+# SwartBerg.Mediator
 
 [![Build Status](https://github.com/SwartBergStudio/Mediator/workflows/CI/badge.svg)](https://github.com/SwartBergStudio/Mediator/actions/workflows/ci.yml)
 [![Release](https://github.com/SwartBergStudio/Mediator/workflows/Release/badge.svg)](https://github.com/SwartBergStudio/Mediator/actions/workflows/release.yml)
@@ -19,6 +19,7 @@ The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of
 - **Pipeline Behaviors**: Add logging, validation, and other cross-cutting concerns easily
 - **Configurable Persistence**: File-based persistence with JSON serialization (can be replaced)
 - **Retry Logic**: Automatically retries failed notifications with exponential backoff
+- **Modern Async Patterns**: Built-in ConfigureAwait(false) for optimal performance
 - **Lightweight**: Minimal dependencies, optimized for performance
 - **.NET 9 Ready**: Takes advantage of .NET 9 performance improvements
 
@@ -31,6 +32,8 @@ The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of
   - Blazor applications
   - ASP.NET Core 9+ applications
   - Console applications
+  - WPF applications
+  - WinForms applications
 
 ## Installation
 
@@ -213,6 +216,10 @@ services.AddMediator(options =>
     
     options.CleanupRetentionPeriod = TimeSpan.FromHours(24);
     options.CleanupInterval = TimeSpan.FromHours(1);
+    
+    // ConfigureAwait is enabled by default for optimal performance
+    // Set to false if you need to preserve synchronization context
+    // options.UseConfigureAwaitGlobally = false;
 }, typeof(Program).Assembly);
 ```
 
@@ -227,11 +234,11 @@ The mediator uses a channel-first approach with optional persistence backup:
 
 ### Flow:
 ```
-Publish() → Channel (immediate) → Background Workers
-     ↓
-Persist() (async backup) → Storage
-     ↓
-Recovery Timer → Load from Storage → Back to Channel
+Publish() ? Channel (immediate) ? Background Workers
+     ?
+Persist() (async backup) ? Storage
+     ?
+Recovery Timer ? Load from Storage ? Back to Channel
 ```
 
 ## Performance Benchmarks
@@ -242,21 +249,22 @@ BenchmarkDotNet results on .NET 9 (Intel Core i7-13620H):
 | Method | Mean | Error | StdDev | Allocated | Throughput |
 |--------|------|-------|---------|-----------|------------|
 | SingleRequest | 98.05 ns | 1.94 ns | 1.81 ns | 672 B | ~10.2M req/sec |
-| BatchRequests100 | 9.70 μs | 0.17 μs | 0.16 μs | 64 KB | ~103K batches/sec |
+| BatchRequests100 | 9.70 ?s | 0.17 ?s | 0.16 ?s | 64 KB | ~103K batches/sec |
 
 ### Notification Processing  
 | Method | Mean | Error | StdDev | Allocated | Throughput |
 |--------|------|-------|---------|-----------|------------|
 | SingleNotification | 348.2 ns | 3.45 ns | 3.23 ns | 717 B | ~2.9M notifs/sec |
-| BatchNotifications100 | 40.18 μs | 0.48 μs | 0.40 μs | 80 KB | ~24.9K batches/sec |
+| BatchNotifications100 | 40.18 ?s | 0.48 ?s | 0.40 ?s | 80 KB | ~24.9K batches/sec |
 
 ### Performance Highlights
 - **Blazing requests**: 98ns per request - one of the fastest mediators available
 - **Ultra-fast notifications**: 348ns with background processing
 - **Outstanding throughput**: 10.2 million requests per second capability
-- **Efficient batch processing**: 100 requests in 9.7μs  
+- **Efficient batch processing**: 100 requests in 9.7?s  
 - **Low memory usage**: Optimized allocations with compiled delegates
 - **Pipeline behavior support**: Full hot path optimization for behaviors too
+- **ConfigureAwait overhead**: Zero performance impact when not used
 - **Enterprise-grade performance**: Perfect for hyperscale production systems
 
 Run benchmarks:
@@ -303,5 +311,3 @@ If this library happens to save you time or makes your project better, and you f
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/swartbergstudio)
 
 **Remember: This library will always be free, regardless of donations. No premium features, no paid support, no strings attached.**
-
-

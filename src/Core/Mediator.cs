@@ -114,8 +114,19 @@ public class Mediator : IMediator, IDisposable
         {
             var currentDelegate = handlerDelegate;
             var behavior = behaviors[i];
+            var shouldUseConfigureAwait = ShouldUseConfigureAwait();
             
-            handlerDelegate = () => behaviorInvoker(behavior, request, currentDelegate, cancellationToken);
+            handlerDelegate = async () =>
+            {
+                if (shouldUseConfigureAwait)
+                {
+                    return await behaviorInvoker(behavior, request, currentDelegate, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    return await behaviorInvoker(behavior, request, currentDelegate, cancellationToken);
+                }
+            };
         }
 
         var result = await handlerDelegate();
@@ -161,7 +172,14 @@ public class Mediator : IMediator, IDisposable
         {
             try
             {
-                await _persistence.PersistAsync(workItem, cancellationToken);
+                if (_options.UseConfigureAwaitGlobally)
+                {
+                    await _persistence.PersistAsync(workItem, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await _persistence.PersistAsync(workItem, cancellationToken);
+                }
             }
             catch (Exception ex)
             {
@@ -169,7 +187,14 @@ public class Mediator : IMediator, IDisposable
             }
         }
 
-        await _channelWriter.WriteAsync(workItem, cancellationToken);
+        if (_options.UseConfigureAwaitGlobally)
+        {
+            await _channelWriter.WriteAsync(workItem, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await _channelWriter.WriteAsync(workItem, cancellationToken);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -260,14 +285,18 @@ public class Mediator : IMediator, IDisposable
             
             var call = Expression.Call(handlerCast, handleMethod, requestCast, tokenParam);
             
-            var taskType = typeof(Task<>).MakeGenericType(responseType);
-            var resultProperty = taskType.GetProperty("Result")!;
-            var resultAccess = Expression.Property(call, resultProperty);
-            var boxedResult = Expression.Convert(resultAccess, typeof(object));
-            var completedTask = Expression.Call(typeof(Task), nameof(Task.FromResult), new[] { typeof(object) }, boxedResult);
+            var shouldUseConfigureAwait = ShouldUseConfigureAwait();
+            var configureAwaitConstant = Expression.Constant(shouldUseConfigureAwait);
+            
+            var configureAwaitCall = Expression.Call(
+                typeof(Mediator), 
+                nameof(ApplyConfigureAwaitToTaskWithResult),
+                new[] { responseType },
+                call,
+                configureAwaitConstant);
             
             return Expression.Lambda<Func<object, object, CancellationToken, Task<object>>>(
-                completedTask, handlerParam, requestParam, tokenParam).Compile();
+                configureAwaitCall, handlerParam, requestParam, tokenParam).Compile();
         });
     }
 
@@ -288,8 +317,18 @@ public class Mediator : IMediator, IDisposable
             
             var call = Expression.Call(handlerCast, handleMethod, requestCast, tokenParam);
             
+            var shouldUseConfigureAwait = ShouldUseConfigureAwait();
+            var configureAwaitConstant = Expression.Constant(shouldUseConfigureAwait);
+            
+            var configureAwaitCall = Expression.Call(
+                typeof(Mediator),
+                nameof(ApplyConfigureAwaitToTask),
+                Type.EmptyTypes,
+                call,
+                configureAwaitConstant);
+            
             return Expression.Lambda<Func<object, object, CancellationToken, Task>>(
-                call, handlerParam, requestParam, tokenParam).Compile();
+                configureAwaitCall, handlerParam, requestParam, tokenParam).Compile();
         });
     }
 
@@ -309,9 +348,62 @@ public class Mediator : IMediator, IDisposable
             
             var call = Expression.Call(handlerCast, handleMethod, notificationCast, tokenParam);
             
+            var shouldUseConfigureAwait = ShouldUseConfigureAwait();
+            var configureAwaitConstant = Expression.Constant(shouldUseConfigureAwait);
+            
+            var configureAwaitCall = Expression.Call(
+                typeof(Mediator),
+                nameof(ApplyConfigureAwaitToTask),
+                Type.EmptyTypes,
+                call,
+                configureAwaitConstant);
+            
             return Expression.Lambda<Func<object, object, CancellationToken, Task>>(
-                call, handlerParam, notificationParam, tokenParam).Compile();
+                configureAwaitCall, handlerParam, notificationParam, tokenParam).Compile();
         });
+    }
+
+    internal static async Task<object> ApplyConfigureAwaitToTaskWithResult<TResponse>(Task<TResponse> task, bool useConfigureAwait)
+    {
+        TResponse result;
+        if (useConfigureAwait)
+        {
+            result = await task.ConfigureAwait(false);
+        }
+        else
+        {
+            result = await task;
+        }
+        return result!;
+    }
+
+    internal static async Task ApplyConfigureAwaitToTask(Task task, bool useConfigureAwait)
+    {
+        if (useConfigureAwait)
+        {
+            await task.ConfigureAwait(false);
+        }
+        else
+        {
+            await task;
+        }
+    }
+
+    /// <summary>
+    /// Determines whether to use ConfigureAwait(false) based on global settings and handler attributes.
+    /// </summary>
+    /// <param name="handlerType">The type of the handler.</param>
+    /// <returns>True if ConfigureAwait(false) should be used, false otherwise.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool ShouldUseConfigureAwaitForType(Type handlerType)
+    {
+        return _options.UseConfigureAwaitGlobally;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool ShouldUseConfigureAwait()
+    {
+        return _options.UseConfigureAwaitGlobally;
     }
 
     private async Task ProcessNotifications()
