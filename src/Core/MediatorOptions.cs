@@ -54,5 +54,12 @@ namespace Mediator.Core
         /// Interval for running cleanup operations.
         /// </summary>
         public TimeSpan CleanupInterval { get; set; } = TimeSpan.FromHours(6);
+
+        /// <summary>
+        /// Global setting to use ConfigureAwait(false) for all async operations.
+        /// When true (default), all handlers will use ConfigureAwait(false) for optimal performance and safety.
+        /// When false, handlers will use normal task behavior which can cause deadlocks in UI applications.
+        /// </summary>
+        public bool UseConfigureAwaitGlobally { get; set; } = true;
     }
 }
