@@ -248,20 +248,20 @@ BenchmarkDotNet results on .NET 9 (Intel Core i7-13620H):
 ### Request Processing
 | Method | Mean | Error | StdDev | Allocated | Throughput |
 |--------|------|-------|---------|-----------|------------|
-| SingleRequest | 98.05 ns | 1.94 ns | 1.81 ns | 672 B | ~10.2M req/sec |
-| BatchRequests100 | 9.70 ?s | 0.17 ?s | 0.16 ?s | 64 KB | ~103K batches/sec |
+| SingleRequest | 92.80 ns | 0.78 ns | 0.73 ns | 680 B | ~10.8M req/sec |
+| BatchRequests100 | 9.14 ?s | 0.11 ?s | 0.10 ?s | 64 KB | ~109K batches/sec |
 
 ### Notification Processing  
 | Method | Mean | Error | StdDev | Allocated | Throughput |
 |--------|------|-------|---------|-----------|------------|
-| SingleNotification | 348.2 ns | 3.45 ns | 3.23 ns | 717 B | ~2.9M notifs/sec |
-| BatchNotifications100 | 40.18 ?s | 0.48 ?s | 0.40 ?s | 80 KB | ~24.9K batches/sec |
+| SingleNotification | 377.45 ns | 5.13 ns | 4.80 ns | 726 B | ~2.6M notifs/sec |
+| BatchNotifications100 | 41.72 ?s | 0.62 ?s | 0.55 ?s | 80 KB | ~24K batches/sec |
 
 ### Performance Highlights
-- **Blazing requests**: 98ns per request - one of the fastest mediators available
-- **Ultra-fast notifications**: 348ns with background processing
-- **Outstanding throughput**: 10.2 million requests per second capability
-- **Efficient batch processing**: 100 requests in 9.7?s  
+- **Blazing requests**: 93ns per request - one of the fastest mediators available
+- **Ultra-fast notifications**: 377ns with background processing
+- **Outstanding throughput**: 10.8 million requests per second capability
+- **Efficient batch processing**: 100 requests in 9.1?s  
 - **Low memory usage**: Optimized allocations with compiled delegates
 - **Pipeline behavior support**: Full hot path optimization for behaviors too
 - **ConfigureAwait overhead**: Zero performance impact when not used
