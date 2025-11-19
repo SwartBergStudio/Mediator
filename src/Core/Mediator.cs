@@ -314,8 +314,13 @@ public sealed class Mediator : IMediator, IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private object[] GetCachedNotificationHandlers(Type notificationType)
+    private object[] GetCachedNotificationHandlers(Type notificationType, IServiceProvider? scopedProvider = null)
     {
+        if (scopedProvider != null)
+        {
+            return ResolveNotificationHandlers(notificationType, scopedProvider);
+        }
+
         return _notificationHandlerCache.GetOrAdd(notificationType, _ =>
         {
             var handlerType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
@@ -327,6 +332,19 @@ public sealed class Mediator : IMediator, IDisposable
             }
             return list.ToArray();
         });
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private object[] ResolveNotificationHandlers(Type notificationType, IServiceProvider provider)
+    {
+        var handlerType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
+        var services = provider.GetServices(handlerType);
+        var list = new List<object>();
+        foreach (var svc in services)
+        {
+            if (svc != null) list.Add(svc);
+        }
+        return list.ToArray();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -445,17 +463,26 @@ public sealed class Mediator : IMediator, IDisposable
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private async Task ProcessNotification(NotificationWorkItem workItem)
     {
         var notificationType = workItem.NotificationType!;
         var notification = workItem.Notification!;
+        using var scope = _serviceProvider.CreateScope();
+        var scopedProvider = scope.ServiceProvider;
+        var token = _cancellationTokenSource.Token;
 
-        var handlers = GetCachedNotificationHandlers(notificationType);
-        
+        var handlers = GetCachedNotificationHandlers(notificationType, scopedProvider);
+
         if (handlers.Length == 0)
         {
-            _logger.LogDebug("No handlers found for notification type {NotificationType}", notificationType.Name);
+            if (_notificationHandlerCache.TryGetValue(notificationType, out var cached) && cached.Length > 0)
+            {
+                _logger.LogWarning("Scoped resolution returned zero handlers for {NotificationType} while cache had {CachedCount}", notificationType.Name, cached.Length);
+            }
+            else
+            {
+                _logger.LogDebug("No handlers found for notification type {NotificationType}", notificationType.Name);
+            }
             return;
         }
 
@@ -465,7 +492,7 @@ public sealed class Mediator : IMediator, IDisposable
         {
             try
             {
-                var t = invoker(handlers[0]!, notification, CancellationToken.None);
+                var t = invoker(handlers[0]!, notification, token);
                 if (t.IsCompletedSuccessfully) return;
                 if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
             }
@@ -484,7 +511,7 @@ public sealed class Mediator : IMediator, IDisposable
                 for (var i = 0; i < count; i++)
                 {
                     var handler = handlers[i];
-                    tasks[i] = ProcessSingleHandler(invoker, handler!, notification);
+                    tasks[i] = ProcessSingleHandler(invoker, handler!, notification, token);
                 }
                 if (_options.UseConfigureAwaitGlobally)
                 {
@@ -512,11 +539,11 @@ public sealed class Mediator : IMediator, IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private async Task ProcessSingleHandler(Func<object, object, CancellationToken, Task> invoker, object handler, object notification)
+    private async Task ProcessSingleHandler(Func<object, object, CancellationToken, Task> invoker, object handler, object notification, CancellationToken token)
     {
         try
         {
-            var t = invoker(handler, notification, CancellationToken.None);
+            var t = invoker(handler, notification, token);
             if (t.IsCompletedSuccessfully) return;
             if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
         }
