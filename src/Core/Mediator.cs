@@ -1,18 +1,20 @@
 using System.Collections.Concurrent;
-using System.Linq;
-using System.Linq.Expressions;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Reflection;
+using System.Buffers;
 
 namespace Mediator.Core;
 
 /// <summary>
-/// High-performance mediator implementation with background processing and persistence support.
+/// High-performance mediator with background processing, optional persistence, and pipeline behaviors.
+/// AOT-friendly invokers and minimized allocations for fast throughput.
 /// </summary>
-public class Mediator : IMediator, IDisposable
+public sealed class Mediator : IMediator, IDisposable
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<Mediator> _logger;
@@ -25,78 +27,161 @@ public class Mediator : IMediator, IDisposable
     private readonly ChannelReader<NotificationWorkItem> _channelReader;
     
     private readonly ConcurrentDictionary<Type, object> _handlerCache = new();
-    private readonly ConcurrentDictionary<Type, Func<object, object, CancellationToken, Task<object>>> _requestInvokers = new();
+    private readonly ConcurrentDictionary<(Type request, Type response), Func<object, object, CancellationToken, Task<object>>> _requestInvokers = new();
     private readonly ConcurrentDictionary<Type, Func<object, object, CancellationToken, Task>> _commandInvokers = new();
     private readonly ConcurrentDictionary<Type, Func<object, object, CancellationToken, Task>> _notificationInvokers = new();
-    private readonly ConcurrentDictionary<Type, Type> _handlerTypeCache = new();
-    private readonly ConcurrentDictionary<Type, object[]> _behaviorCache = new();
+    private readonly ConcurrentDictionary<(Type request, Type response), Type> _handlerTypeCache = new();
+    private readonly ConcurrentDictionary<(Type request, Type response), object[]> _behaviorCache = new();
     private readonly ConcurrentDictionary<Type, Func<object, object, Func<Task<object>>, CancellationToken, Task<object>>> _behaviorInvokers = new();
+    private readonly ConcurrentDictionary<Type, object[]> _notificationHandlerCache = new();
     
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly Task[] _backgroundTasks;
-    private readonly Timer? _recoveryTimer;
-    private readonly Timer? _cleanupTimer;
+
+    private Task? _recoveryLoop;
+    private Task? _cleanupLoop;
+
+    private TimeSpan[] _retryDelays = Array.Empty<TimeSpan>();
     
     private bool _disposed;
 
     /// <summary>
-    /// Initializes a new instance of the Mediator class.
+    /// Initializes a new mediator using Microsoft.Extensions options binding.
     /// </summary>
+    /// <param name="serviceProvider">Service provider used to resolve handlers and behaviors.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="options">Configured mediator options.</param>
+    /// <param name="persistence">Notification persistence implementation.</param>
+    /// <param name="serializer">Notification serializer implementation.</param>
     public Mediator(
         IServiceProvider serviceProvider,
         ILogger<Mediator> logger,
         IOptions<MediatorOptions> options,
         INotificationPersistence persistence,
         INotificationSerializer serializer)
+        : this(serviceProvider, logger, options.Value, persistence, serializer)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new mediator using a direct options instance.
+    /// </summary>
+    /// <param name="serviceProvider">Service provider used to resolve handlers and behaviors.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="options">Mediator options.</param>
+    /// <param name="persistence">Notification persistence implementation.</param>
+    /// <param name="serializer">Notification serializer implementation.</param>
+    public Mediator(
+        IServiceProvider serviceProvider,
+        ILogger<Mediator> logger,
+        MediatorOptions options,
+        INotificationPersistence persistence,
+        INotificationSerializer serializer)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
-        _options = options.Value;
+        _options = options;
+        SanitizeOptions(_options);
         _persistence = persistence;
         _serializer = serializer;
+
+        InitializeRetryDelays();
 
         var channelOptions = new BoundedChannelOptions(_options.ChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = false,
-            SingleWriter = false
+            SingleWriter = false,
+            AllowSynchronousContinuations = false
         };
 
         _notificationChannel = Channel.CreateBounded<NotificationWorkItem>(channelOptions);
         _channelWriter = _notificationChannel.Writer;
         _channelReader = _notificationChannel.Reader;
 
-        _backgroundTasks = new Task[_options.NotificationWorkerCount];
-        for (var i = 0; i < _options.NotificationWorkerCount; i++)
+        _backgroundTasks = new Task[Math.Max(0, _options.NotificationWorkerCount)];
+        for (var i = 0; i < _backgroundTasks.Length; i++)
         {
             _backgroundTasks[i] = Task.Run(ProcessNotifications, _cancellationTokenSource.Token);
         }
 
         if (_options.EnablePersistence)
         {
-            _recoveryTimer = new Timer(RecoverNotifications, null, _options.ProcessingInterval, _options.ProcessingInterval);
-            _cleanupTimer = new Timer(Cleanup, null, _options.CleanupInterval, _options.CleanupInterval);
+            _recoveryLoop = Task.Run(() => RunPeriodic(_options.ProcessingInterval, RecoverNotificationsAsync, _cancellationTokenSource.Token), _cancellationTokenSource.Token);
+            _cleanupLoop = Task.Run(() => RunPeriodic(_options.CleanupInterval, CleanupAsync, _cancellationTokenSource.Token), _cancellationTokenSource.Token);
         }
     }
 
-    /// <inheritdoc />
+    private static void SanitizeOptions(MediatorOptions o)
+    {
+        if (o.ChannelCapacity <= 0) o.ChannelCapacity = 1;
+        if (o.ProcessingBatchSize <= 0) o.ProcessingBatchSize = 1;
+        if (o.MaxRetryAttempts < 0) o.MaxRetryAttempts = 0;
+        if (o.InitialRetryDelay < TimeSpan.Zero) o.InitialRetryDelay = TimeSpan.Zero;
+        if (o.RetryDelayMultiplier <= 0) o.RetryDelayMultiplier = 1.0;
+        if (o.CleanupInterval <= TimeSpan.Zero) o.CleanupInterval = TimeSpan.FromMinutes(1);
+        if (o.ProcessingInterval <= TimeSpan.Zero) o.ProcessingInterval = TimeSpan.FromSeconds(1);
+    }
+
+    private void InitializeRetryDelays()
+    {
+        if (_options.MaxRetryAttempts > 0 && _options.InitialRetryDelay > TimeSpan.Zero)
+        {
+            var len = _options.MaxRetryAttempts;
+            _retryDelays = new TimeSpan[len];
+            var baseTicks = _options.InitialRetryDelay.Ticks;
+            for (int i = 0; i < len; i++)
+            {
+                var factor = i == 0 ? 1.0 : Math.Pow(_options.RetryDelayMultiplier, i);
+                _retryDelays[i] = TimeSpan.FromTicks((long)(baseTicks * factor));
+            }
+        }
+    }
+
+    private static async Task RunPeriodic(TimeSpan interval, Func<Task> action, CancellationToken token)
+    {
+        if (interval <= TimeSpan.Zero)
+            interval = TimeSpan.FromSeconds(1);
+
+        var timer = new PeriodicTimer(interval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+            {
+                try { await action().ConfigureAwait(false); }
+                catch { }
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally { timer.Dispose(); }
+    }
+
+    /// <summary>
+    /// Sends a request and awaits a response from the appropriate handler.
+    /// </summary>
+    /// <typeparam name="TResponse">Response type.</typeparam>
+    /// <param name="request">The request instance.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The response from the handler.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
         var requestType = request.GetType();
-        
         var behaviors = GetCachedBehaviors(requestType, typeof(TResponse));
-        
         if (behaviors.Length > 0)
-        {
             return await SendWithBehaviors<TResponse>(request, behaviors, requestType, cancellationToken);
-        }
         
         var invoker = GetOrCreateRequestInvoker(requestType, typeof(TResponse));
         var handler = GetCachedHandler(requestType, typeof(TResponse));
 
-        var result = await invoker(handler, request, cancellationToken);
-        return (TResponse)result;
+        var task = invoker(handler, request, cancellationToken);
+        if (task.IsCompletedSuccessfully)
+            return (TResponse)task.GetAwaiter().GetResult();
+
+        if (_options.UseConfigureAwaitGlobally)
+            return (TResponse)await task.ConfigureAwait(false);
+        else
+            return (TResponse)await task;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -112,28 +197,27 @@ public class Mediator : IMediator, IDisposable
 
         for (var i = behaviors.Length - 1; i >= 0; i--)
         {
-            var currentDelegate = handlerDelegate;
             var behavior = behaviors[i];
-            var shouldUseConfigureAwait = ShouldUseConfigureAwait();
-            
-            handlerDelegate = async () =>
-            {
-                if (shouldUseConfigureAwait)
-                {
-                    return await behaviorInvoker(behavior, request, currentDelegate, cancellationToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    return await behaviorInvoker(behavior, request, currentDelegate, cancellationToken);
-                }
-            };
+            var currentDelegate = handlerDelegate;
+            handlerDelegate = () => behaviorInvoker(behavior, request, currentDelegate, cancellationToken);
         }
 
-        var result = await handlerDelegate();
-        return (TResponse)result;
+        var task = handlerDelegate();
+        if (task.IsCompletedSuccessfully)
+            return (TResponse)task.GetAwaiter().GetResult();
+
+        if (_options.UseConfigureAwaitGlobally)
+            return (TResponse)await task.ConfigureAwait(false);
+        else
+            return (TResponse)await task;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Sends a command (no response) to its handler.
+    /// </summary>
+    /// <typeparam name="TRequest">Request type.</typeparam>
+    /// <param name="request">The request instance.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task Send<TRequest>(TRequest request, CancellationToken cancellationToken = default)
         where TRequest : IRequest
@@ -142,10 +226,16 @@ public class Mediator : IMediator, IDisposable
         var invoker = GetOrCreateCommandInvoker(requestType);
         var handler = GetCachedHandler(requestType, null);
 
-        await invoker(handler, request!, cancellationToken);
+        var task = invoker(handler, request!, cancellationToken);
+        if (task.IsCompletedSuccessfully) return;
+        if (_options.UseConfigureAwaitGlobally) await task.ConfigureAwait(false); else await task;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Sends a command (no response) to its handler.
+    /// </summary>
+    /// <param name="request">The request instance.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task Send(IRequest request, CancellationToken cancellationToken = default)
     {
@@ -153,32 +243,42 @@ public class Mediator : IMediator, IDisposable
         var invoker = GetOrCreateCommandInvoker(requestType);
         var handler = GetCachedHandler(requestType, null);
 
-        await invoker(handler, request, cancellationToken);
+        var task = invoker(handler, request, cancellationToken);
+        if (task.IsCompletedSuccessfully) return;
+        if (_options.UseConfigureAwaitGlobally) await task.ConfigureAwait(false); else await task;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Publishes a notification to all matching handlers. Processing is done in background workers.
+    /// </summary>
+    /// <typeparam name="TNotification">Notification type.</typeparam>
+    /// <param name="notification">The notification instance.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
         where TNotification : INotification
     {
-        var workItem = new NotificationWorkItem
-        {
-            Notification = notification,
-            NotificationType = typeof(TNotification),
-            CreatedAt = DateTime.UtcNow,
-            SerializedNotification = _serializer.Serialize(notification, typeof(TNotification))
-        };
-
+        var notificationType = typeof(TNotification);
+        string? serializedNotification = null;
         if (_options.EnablePersistence && _persistence != null)
+        {
+            serializedNotification = _serializer.Serialize(notification, notificationType);
+        }
+
+        var workItem = new NotificationWorkItem(
+            notification,
+            notificationType,
+            DateTime.UtcNow,
+            serializedNotification ?? string.Empty);
+
+        if (_options.EnablePersistence && _persistence != null && !string.IsNullOrEmpty(serializedNotification))
         {
             try
             {
-                if (_options.UseConfigureAwaitGlobally)
+                var persistTask = _persistence.PersistAsync(workItem, cancellationToken);
+                if (!persistTask.IsCompletedSuccessfully)
                 {
-                    await _persistence.PersistAsync(workItem, cancellationToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    await _persistence.PersistAsync(workItem, cancellationToken);
+                    if (_options.UseConfigureAwaitGlobally) await persistTask.ConfigureAwait(false); else await persistTask;
                 }
             }
             catch (Exception ex)
@@ -187,30 +287,52 @@ public class Mediator : IMediator, IDisposable
             }
         }
 
-        if (_options.UseConfigureAwaitGlobally)
+        if (!_channelWriter.TryWrite(workItem))
         {
-            await _channelWriter.WriteAsync(workItem, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            await _channelWriter.WriteAsync(workItem, cancellationToken);
+            var writeTask = _channelWriter.WriteAsync(workItem, cancellationToken).AsTask();
+            if (!writeTask.IsCompletedSuccessfully)
+            {
+                if (_options.UseConfigureAwaitGlobally) await writeTask.ConfigureAwait(false); else await writeTask;
+            }
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private object[] GetCachedBehaviors(Type requestType, Type responseType)
     {
-        return _behaviorCache.GetOrAdd(requestType, _ =>
+        return _behaviorCache.GetOrAdd((requestType, responseType), _ =>
         {
             var behaviorType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, responseType);
-            return _serviceProvider.GetServices(behaviorType).Where(b => b != null).ToArray()!;
+            var services = _serviceProvider.GetServices(behaviorType);
+            var list = new List<object>();
+            foreach (var svc in services)
+            {
+                if (svc != null) list.Add(svc);
+            }
+            return list.ToArray();
+        });
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private object[] GetCachedNotificationHandlers(Type notificationType)
+    {
+        return _notificationHandlerCache.GetOrAdd(notificationType, _ =>
+        {
+            var handlerType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
+            var services = _serviceProvider.GetServices(handlerType);
+            var list = new List<object>();
+            foreach (var svc in services)
+            {
+                if (svc != null) list.Add(svc);
+            }
+            return list.ToArray();
         });
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Type GetOrCreateHandlerType(Type requestType, Type responseType)
     {
-        return _handlerTypeCache.GetOrAdd(requestType, _ => 
+        return _handlerTypeCache.GetOrAdd((requestType, responseType), _ => 
             typeof(IRequestHandler<,>).MakeGenericType(requestType, responseType));
     }
 
@@ -230,74 +352,47 @@ public class Mediator : IMediator, IDisposable
     {
         return _behaviorInvokers.GetOrAdd(behaviorType, _ =>
         {
-            var requestType = behaviorType.GetGenericArguments()[0];
-            var responseType = behaviorType.GetGenericArguments()[1];
-            var handleMethod = behaviorType.GetMethod("Handle")!;
-            
-            var behaviorParam = Expression.Parameter(typeof(object), "behavior");
-            var requestParam = Expression.Parameter(typeof(object), "request");
-            var nextParam = Expression.Parameter(typeof(Func<Task<object>>), "next");
-            var tokenParam = Expression.Parameter(typeof(CancellationToken), "token");
-            
-            var behaviorCast = Expression.Convert(behaviorParam, behaviorType);
-            var requestCast = Expression.Convert(requestParam, requestType);
-            
-            var delegateType = typeof(RequestHandlerDelegate<>).MakeGenericType(responseType);
-            
-            var convertLambda = Expression.Lambda(delegateType,
-                Expression.Call(typeof(Mediator), nameof(ConvertObjectTask), new[] { responseType }, 
-                    Expression.Call(nextParam, typeof(Func<Task<object>>).GetMethod("Invoke")!)));
-            
-            var call = Expression.Call(behaviorCast, handleMethod, requestCast, convertLambda, tokenParam);
-            var convertResult = Expression.Call(typeof(Mediator), nameof(ConvertTaskToObject), new[] { responseType }, call);
-            
-            return Expression.Lambda<Func<object, object, Func<Task<object>>, CancellationToken, Task<object>>>(
-                convertResult, behaviorParam, requestParam, nextParam, tokenParam).Compile();
+            var genericArgs = behaviorType.GetGenericArguments();
+            var requestType = genericArgs[0];
+            var responseType = genericArgs[1];
+            var method = typeof(Mediator).GetMethod(nameof(InvokeBehavior), BindingFlags.NonPublic | BindingFlags.Static)!;
+            var generic = method.MakeGenericMethod(requestType, responseType);
+            return (Func<object, object, Func<Task<object>>, CancellationToken, Task<object>>)generic.CreateDelegate(typeof(Func<object, object, Func<Task<object>>, CancellationToken, Task<object>>));
         });
     }
 
-    private static async Task<TResponse> ConvertObjectTask<TResponse>(Task<object> task)
+    private static async Task<object> InvokeBehavior<TRequest, TResponse>(object behaviorObj, object requestObj, Func<Task<object>> next, CancellationToken token)
+        where TRequest : IRequest<TResponse>
     {
-        var result = await task;
-        return (TResponse)result;
-    }
+        var behavior = (IPipelineBehavior<TRequest, TResponse>)behaviorObj;
 
-    private static async Task<object> ConvertTaskToObject<TResponse>(Task<TResponse> task)
-    {
-        var result = await task;
+        async Task<TResponse> NextTyped()
+        {
+            var obj = await next();
+            return (TResponse)obj;
+        }
+
+        var result = await behavior.Handle((TRequest)requestObj, NextTyped, token);
         return result!;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Func<object, object, CancellationToken, Task<object>> GetOrCreateRequestInvoker(Type requestType, Type responseType)
     {
-        return _requestInvokers.GetOrAdd(requestType, _ =>
+        return _requestInvokers.GetOrAdd((requestType, responseType), _ =>
         {
-            var handlerType = typeof(IRequestHandler<,>).MakeGenericType(requestType, responseType);
-            var handleMethod = handlerType.GetMethod("Handle")!;
-            
-            var handlerParam = Expression.Parameter(typeof(object), "handler");
-            var requestParam = Expression.Parameter(typeof(object), "request");
-            var tokenParam = Expression.Parameter(typeof(CancellationToken), "token");
-            
-            var handlerCast = Expression.Convert(handlerParam, handlerType);
-            var requestCast = Expression.Convert(requestParam, requestType);
-            
-            var call = Expression.Call(handlerCast, handleMethod, requestCast, tokenParam);
-            
-            var shouldUseConfigureAwait = ShouldUseConfigureAwait();
-            var configureAwaitConstant = Expression.Constant(shouldUseConfigureAwait);
-            
-            var configureAwaitCall = Expression.Call(
-                typeof(Mediator), 
-                nameof(ApplyConfigureAwaitToTaskWithResult),
-                new[] { responseType },
-                call,
-                configureAwaitConstant);
-            
-            return Expression.Lambda<Func<object, object, CancellationToken, Task<object>>>(
-                configureAwaitCall, handlerParam, requestParam, tokenParam).Compile();
+            var method = typeof(Mediator).GetMethod(nameof(InvokeRequestHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
+            var generic = method.MakeGenericMethod(requestType, responseType);
+            return (Func<object, object, CancellationToken, Task<object>>)generic.CreateDelegate(typeof(Func<object, object, CancellationToken, Task<object>>));
         });
+    }
+
+    private static async Task<object> InvokeRequestHandler<TRequest, TResponse>(object handlerObj, object requestObj, CancellationToken token)
+        where TRequest : IRequest<TResponse>
+    {
+        var handler = (IRequestHandler<TRequest, TResponse>)handlerObj;
+        var result = await handler.Handle((TRequest)requestObj, token);
+        return result!;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -305,110 +400,40 @@ public class Mediator : IMediator, IDisposable
     {
         return _commandInvokers.GetOrAdd(requestType, _ =>
         {
-            var handlerType = typeof(IRequestHandler<>).MakeGenericType(requestType);
-            var handleMethod = handlerType.GetMethod("Handle")!;
-            
-            var handlerParam = Expression.Parameter(typeof(object), "handler");
-            var requestParam = Expression.Parameter(typeof(object), "request");
-            var tokenParam = Expression.Parameter(typeof(CancellationToken), "token");
-            
-            var handlerCast = Expression.Convert(handlerParam, handlerType);
-            var requestCast = Expression.Convert(requestParam, requestType);
-            
-            var call = Expression.Call(handlerCast, handleMethod, requestCast, tokenParam);
-            
-            var shouldUseConfigureAwait = ShouldUseConfigureAwait();
-            var configureAwaitConstant = Expression.Constant(shouldUseConfigureAwait);
-            
-            var configureAwaitCall = Expression.Call(
-                typeof(Mediator),
-                nameof(ApplyConfigureAwaitToTask),
-                Type.EmptyTypes,
-                call,
-                configureAwaitConstant);
-            
-            return Expression.Lambda<Func<object, object, CancellationToken, Task>>(
-                configureAwaitCall, handlerParam, requestParam, tokenParam).Compile();
+            var method = typeof(Mediator).GetMethod(nameof(InvokeCommandHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
+            var generic = method.MakeGenericMethod(requestType);
+            return (Func<object, object, CancellationToken, Task>)generic.CreateDelegate(typeof(Func<object, object, CancellationToken, Task>));
         });
     }
 
+    private static Task InvokeCommandHandler<TRequest>(object handlerObj, object requestObj, CancellationToken token)
+        where TRequest : IRequest
+    {
+        var handler = (IRequestHandler<TRequest>)handlerObj;
+        return handler.Handle((TRequest)requestObj, token);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Func<object, object, CancellationToken, Task> GetOrCreateNotificationInvoker(Type notificationType)
     {
         return _notificationInvokers.GetOrAdd(notificationType, _ =>
         {
-            var handlerType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
-            var handleMethod = handlerType.GetMethod("Handle")!;
-            
-            var handlerParam = Expression.Parameter(typeof(object), "handler");
-            var notificationParam = Expression.Parameter(typeof(object), "notification");
-            var tokenParam = Expression.Parameter(typeof(CancellationToken), "token");
-            
-            var handlerCast = Expression.Convert(handlerParam, handlerType);
-            var notificationCast = Expression.Convert(notificationParam, notificationType);
-            
-            var call = Expression.Call(handlerCast, handleMethod, notificationCast, tokenParam);
-            
-            var shouldUseConfigureAwait = ShouldUseConfigureAwait();
-            var configureAwaitConstant = Expression.Constant(shouldUseConfigureAwait);
-            
-            var configureAwaitCall = Expression.Call(
-                typeof(Mediator),
-                nameof(ApplyConfigureAwaitToTask),
-                Type.EmptyTypes,
-                call,
-                configureAwaitConstant);
-            
-            return Expression.Lambda<Func<object, object, CancellationToken, Task>>(
-                configureAwaitCall, handlerParam, notificationParam, tokenParam).Compile();
+            var method = typeof(Mediator).GetMethod(nameof(InvokeNotificationHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
+            var generic = method.MakeGenericMethod(notificationType);
+            return (Func<object, object, CancellationToken, Task>)generic.CreateDelegate(typeof(Func<object, object, CancellationToken, Task>));
         });
     }
 
-    internal static async Task<object> ApplyConfigureAwaitToTaskWithResult<TResponse>(Task<TResponse> task, bool useConfigureAwait)
+    private static Task InvokeNotificationHandler<TNotification>(object handlerObj, object notificationObj, CancellationToken token)
+        where TNotification : INotification
     {
-        TResponse result;
-        if (useConfigureAwait)
-        {
-            result = await task.ConfigureAwait(false);
-        }
-        else
-        {
-            result = await task;
-        }
-        return result!;
-    }
-
-    internal static async Task ApplyConfigureAwaitToTask(Task task, bool useConfigureAwait)
-    {
-        if (useConfigureAwait)
-        {
-            await task.ConfigureAwait(false);
-        }
-        else
-        {
-            await task;
-        }
-    }
-
-    /// <summary>
-    /// Determines whether to use ConfigureAwait(false) based on global settings and handler attributes.
-    /// </summary>
-    /// <param name="handlerType">The type of the handler.</param>
-    /// <returns>True if ConfigureAwait(false) should be used, false otherwise.</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool ShouldUseConfigureAwaitForType(Type handlerType)
-    {
-        return _options.UseConfigureAwaitGlobally;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool ShouldUseConfigureAwait()
-    {
-        return _options.UseConfigureAwaitGlobally;
+        var handler = (INotificationHandler<TNotification>)handlerObj;
+        return handler.Handle((TNotification)notificationObj, token);
     }
 
     private async Task ProcessNotifications()
     {
-        await foreach (var workItem in _channelReader.ReadAllAsync(_cancellationTokenSource.Token))
+        await foreach (var workItem in _channelReader.ReadAllAsync(_cancellationTokenSource.Token).ConfigureAwait(false))
         {
             if (workItem.NotificationType == null || workItem.Notification == null)
             {
@@ -416,49 +441,106 @@ public class Mediator : IMediator, IDisposable
                 continue;
             }
 
-            await ProcessNotification(workItem);
+            await ProcessNotification(workItem).ConfigureAwait(false);
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private async Task ProcessNotification(NotificationWorkItem workItem)
     {
         var notificationType = workItem.NotificationType!;
         var notification = workItem.Notification!;
 
-        var handlerType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
-        var handlers = _serviceProvider.GetServices(handlerType).Where(h => h != null);
+        var handlers = GetCachedNotificationHandlers(notificationType);
         
-        if (!handlers.Any())
+        if (handlers.Length == 0)
         {
             _logger.LogDebug("No handlers found for notification type {NotificationType}", notificationType.Name);
             return;
         }
 
         var invoker = GetOrCreateNotificationInvoker(notificationType);
-        var tasks = handlers.Select(async handler =>
+        
+        if (handlers.Length == 1)
         {
             try
             {
-                await invoker(handler!, notification, CancellationToken.None);
+                var t = invoker(handlers[0]!, notification, CancellationToken.None);
+                if (t.IsCompletedSuccessfully) return;
+                if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Notification handler {HandlerType} failed", handler?.GetType().Name ?? "Unknown");
+                _logger.LogWarning(ex, "Notification handler {HandlerType} failed", handlers[0]?.GetType().Name ?? "Unknown");
             }
-        });
-
-        await Task.WhenAll(tasks);
+        }
+        else
+        {
+            var pool = ArrayPool<Task>.Shared;
+            var tasks = pool.Rent(handlers.Length);
+            var count = handlers.Length;
+            try
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    var handler = handlers[i];
+                    tasks[i] = ProcessSingleHandler(invoker, handler!, notification);
+                }
+                if (_options.UseConfigureAwaitGlobally)
+                {
+                    for (int i = 0; i < count; i++)
+                    {
+                        var t = tasks[i];
+                        if (!t.IsCompletedSuccessfully) await t.ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < count; i++)
+                    {
+                        var t = tasks[i];
+                        if (!t.IsCompletedSuccessfully) await t;
+                    }
+                }
+            }
+            finally
+            {
+                for (var i = 0; i < count; i++) tasks[i] = null!;
+                pool.Return(tasks);
+            }
+        }
     }
 
-    private void RecoverNotifications(object? state)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private async Task ProcessSingleHandler(Func<object, object, CancellationToken, Task> invoker, object handler, object notification)
+    {
+        try
+        {
+            var t = invoker(handler, notification, CancellationToken.None);
+            if (t.IsCompletedSuccessfully) return;
+            if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Notification handler {HandlerType} failed", handler.GetType().Name);
+        }
+    }
+    
+    private async Task RecoverNotificationsAsync()
     {
         if (!_options.EnablePersistence || _persistence == null) return;
 
         try
         {
-            var pendingNotifications = _persistence.GetPendingAsync(_options.ProcessingBatchSize, _cancellationTokenSource.Token).Result;
+            var pendingNotifications = await _persistence.GetPendingAsync(_options.ProcessingBatchSize, _cancellationTokenSource.Token).ConfigureAwait(false);
+            var list = new List<Persistence.PersistedNotificationWorkItem>();
+            foreach (var item in pendingNotifications)
+            {
+                if (item != null) list.Add(item);
+            }
+            if (list.Count == 0) return;
 
-            foreach (var persistedItem in pendingNotifications)
+            foreach (var persistedItem in list)
             {
                 if (!IsValidPersistedItem(persistedItem))
                 {
@@ -468,12 +550,12 @@ public class Mediator : IMediator, IDisposable
 
                 try
                 {
-                    ProcessPersistedItem(persistedItem!);
+                    await ProcessPersistedItemAsync(persistedItem!).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Failed to recover notification {NotificationId}", persistedItem!.Id);
-                    HandleRetry(persistedItem);
+                    await HandleRetryAsync(persistedItem).ConfigureAwait(false);
                 }
             }
         }
@@ -491,29 +573,31 @@ public class Mediator : IMediator, IDisposable
                !string.IsNullOrEmpty(item.WorkItem.SerializedNotification);
     }
 
-    private void ProcessPersistedItem(Persistence.PersistedNotificationWorkItem persistedItem)
+    private async Task ProcessPersistedItemAsync(Persistence.PersistedNotificationWorkItem persistedItem)
     {
         var notification = _serializer.Deserialize(persistedItem.WorkItem.SerializedNotification, persistedItem.WorkItem.NotificationType!);
         
-        var workItem = new NotificationWorkItem
-        {
-            Notification = notification,
-            NotificationType = persistedItem.WorkItem.NotificationType,
-            CreatedAt = persistedItem.WorkItem.CreatedAt,
-            SerializedNotification = persistedItem.WorkItem.SerializedNotification
-        };
+        var workItem = new NotificationWorkItem(
+            notification,
+            persistedItem.WorkItem.NotificationType,
+            persistedItem.WorkItem.CreatedAt,
+            persistedItem.WorkItem.SerializedNotification);
 
         if (_channelWriter.TryWrite(workItem))
         {
-            _persistence?.CompleteAsync(persistedItem.Id, _cancellationTokenSource.Token).Wait();
+            var t = _persistence!.CompleteAsync(persistedItem.Id, _cancellationTokenSource.Token);
+            if (!t.IsCompletedSuccessfully)
+            {
+                if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
+            }
         }
         else
         {
-            HandleRetry(persistedItem);
+            await HandleRetryAsync(persistedItem).ConfigureAwait(false);
         }
     }
 
-    private void HandleRetry(Persistence.PersistedNotificationWorkItem item)
+    private async Task HandleRetryAsync(Persistence.PersistedNotificationWorkItem item)
     {
         if (item.AttemptCount >= _options.MaxRetryAttempts)
         {
@@ -521,20 +605,36 @@ public class Mediator : IMediator, IDisposable
             return;
         }
 
-        var delay = TimeSpan.FromTicks((long)(_options.InitialRetryDelay.Ticks * Math.Pow(_options.RetryDelayMultiplier, item.AttemptCount)));
+        TimeSpan delay;
+        if (_retryDelays.Length > 0 && item.AttemptCount >= 0 && item.AttemptCount < _retryDelays.Length)
+        {
+            delay = _retryDelays[item.AttemptCount];
+        }
+        else
+        {
+            delay = TimeSpan.FromTicks((long)(_options.InitialRetryDelay.Ticks * Math.Pow(_options.RetryDelayMultiplier, item.AttemptCount)));
+        }
+
         var retryAfter = DateTime.UtcNow.Add(delay);
         
-        _persistence?.FailAsync(item.Id, new Exception("Retry scheduled"), retryAfter, _cancellationTokenSource.Token).Wait();
+        var t = _persistence!.FailAsync(item.Id, new Exception("Retry scheduled"), retryAfter, _cancellationTokenSource.Token);
+        if (!t.IsCompletedSuccessfully)
+        {
+            if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
+        }
     }
-
-    private void Cleanup(object? state)
+    
+    private async Task CleanupAsync()
     {
         if (!_options.EnablePersistence || _persistence == null) return;
-
         try
         {
             var cutoffDate = DateTime.UtcNow.Subtract(_options.CleanupRetentionPeriod);
-            _persistence.CleanupAsync(cutoffDate, _cancellationTokenSource.Token).Wait();
+            var t = _persistence!.CleanupAsync(cutoffDate, _cancellationTokenSource.Token);
+            if (!t.IsCompletedSuccessfully)
+            {
+                if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
+            }
         }
         catch (Exception ex)
         {
@@ -542,7 +642,9 @@ public class Mediator : IMediator, IDisposable
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Disposes the mediator, stopping background processing and releasing resources.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
@@ -552,18 +654,22 @@ public class Mediator : IMediator, IDisposable
         
         if (_backgroundTasks.Length > 0)
         {
-            try
+            try { Task.WaitAll(_backgroundTasks, TimeSpan.FromSeconds(2)); } catch { }
+        }
+
+        try
+        {
+            if (_recoveryLoop != null || _cleanupLoop != null)
             {
-                Task.WaitAll(_backgroundTasks, TimeSpan.FromSeconds(2));
-            }
-            catch (AggregateException)
-            {
+                var list = new List<Task>(2);
+                if (_recoveryLoop != null) list.Add(_recoveryLoop);
+                if (_cleanupLoop != null) list.Add(_cleanupLoop);
+                Task.WhenAll(list).Wait(TimeSpan.FromSeconds(2));
             }
         }
+        catch { }
         
-        _recoveryTimer?.Dispose();
-        _cleanupTimer?.Dispose();
-        _cancellationTokenSource?.Dispose();
+        _cancellationTokenSource.Dispose();
         
         _disposed = true;
     }

@@ -1,4 +1,4 @@
 using BenchmarkDotNet.Running;
 using Mediator.Benchmarks;
 
-BenchmarkRunner.Run<QuickBenchmarks>();
+BenchmarkSwitcher.FromAssembly(typeof(QuickBenchmarks).Assembly).Run(args);
