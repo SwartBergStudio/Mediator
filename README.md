@@ -1,4 +1,4 @@
-# SwartBerg.Mediator
+﻿# SwartBerg.Mediator
 
 [![Build Status](https://github.com/SwartBergStudio/Mediator/workflows/CI/badge.svg)](https://github.com/SwartBergStudio/Mediator/actions/workflows/ci.yml)
 [![Release](https://github.com/SwartBergStudio/Mediator/workflows/Release/badge.svg)](https://github.com/SwartBergStudio/Mediator/actions/workflows/release.yml)
@@ -14,14 +14,15 @@ The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of
 
 ## Features
 
-- **High Performance**: Uses expression trees and caching to avoid reflection overhead
-- **Background Processing**: Handles notifications in the background without blocking your app
-- **Pipeline Behaviors**: Add logging, validation, and other cross-cutting concerns easily
-- **Configurable Persistence**: File-based persistence with JSON serialization (can be replaced)
-- **Retry Logic**: Automatically retries failed notifications with exponential backoff
-- **Modern Async Patterns**: Built-in ConfigureAwait(false) for optimal performance
-- **Lightweight**: Minimal dependencies, optimized for performance
-- **.NET 9 Ready**: Takes advantage of .NET 9 performance improvements
+- **High Performance**: Precompiled generic delegates (no runtime expression compilation)
+- **Background Processing**: Non-blocking notification dispatch with worker pool
+- **Pipeline Behaviors**: Plug-in cross-cutting concerns
+- **Configurable Persistence**: Pluggable store & serializer
+- **Retry Logic**: Exponential backoff with precomputed delays
+- **Modern Async Patterns**: Optional global ConfigureAwait(false)
+- **Lightweight**: Low allocations, minimal deps
+- **AOT Friendly**: No Expression.Compile, predictable startup
+- **.NET 9 Ready**: Utilizes latest runtime improvements
 
 ## Requirements
 
@@ -136,8 +137,6 @@ public class UserController : ControllerBase
 
 ### Pipeline Behaviors
 
-Add cross-cutting concerns like validation, logging, or caching:
-
 ```csharp
 public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
@@ -154,49 +153,10 @@ services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>
 
 ### Custom Persistence
 
-By default, the mediator uses file-based persistence for crash recovery. The channel handles processing for high throughput.
-
-Replace with custom persistence:
-
 ```csharp
 services.AddSingleton<INotificationPersistence, RedisNotificationPersistence>();
-
 services.AddSingleton<INotificationPersistence, SqlServerNotificationPersistence>();
-
 services.AddMediator(options => options.EnablePersistence = false, typeof(Program).Assembly);
-```
-
-Example Redis implementation:
-```csharp
-public class RedisNotificationPersistence : INotificationPersistence
-{
-    private readonly IDatabase _database;
-    
-    public RedisNotificationPersistence(IConnectionMultiplexer redis)
-    {
-        _database = redis.GetDatabase();
-    }
-    
-    public async Task<string> PersistAsync(NotificationWorkItem workItem, CancellationToken cancellationToken = default)
-    {
-        var id = Guid.NewGuid().ToString();
-        var persistedItem = new PersistedNotificationWorkItem
-        {
-            Id = id,
-            WorkItem = workItem,
-            CreatedAt = DateTime.UtcNow,
-            AttemptCount = 0
-        };
-        
-        var key = $"mediator:notifications:{id}";
-        var value = JsonSerializer.Serialize(persistedItem);
-        await _database.StringSetAsync(key, value);
-        
-        return id;
-    }
-    
-    // implement other interface methods
-}
 ```
 
 ### Configuration Options
@@ -205,109 +165,106 @@ public class RedisNotificationPersistence : INotificationPersistence
 services.AddMediator(options =>
 {
     options.NotificationWorkerCount = 4;
-    
     options.EnablePersistence = true;
     options.ProcessingInterval = TimeSpan.FromSeconds(30);
     options.ProcessingBatchSize = 50;
-    
     options.MaxRetryAttempts = 3;
     options.InitialRetryDelay = TimeSpan.FromMinutes(2);
     options.RetryDelayMultiplier = 2.0;
-    
     options.CleanupRetentionPeriod = TimeSpan.FromHours(24);
     options.CleanupInterval = TimeSpan.FromHours(1);
-    
-    // ConfigureAwait is enabled by default for optimal performance
-    // Set to false if you need to preserve synchronization context
-    // options.UseConfigureAwaitGlobally = false;
+    // options.UseConfigureAwaitGlobally = false; // only if you need sync ctx
 }, typeof(Program).Assembly);
 ```
 
 ## Architecture
 
-The mediator uses a channel-first approach with optional persistence backup:
+Channel-first with optional persistence:
 
-1. **Primary Processing**: In-memory channels for fast, reliable processing
-2. **Persistence**: Optional backup that saves notifications to disk/storage
-3. **Recovery**: On startup/timer, recovers persisted notifications back into the channel
-4. **Cleanup**: Removes old persisted items periodically
+1. In-memory channel dispatch
+2. Optional persistence backup
+3. Periodic recovery loop
+4. Periodic cleanup loop
 
-### Flow:
 ```
-Publish() ? Channel (immediate) ? Background Workers
-     ?
-Persist() (async backup) ? Storage
-     ?
-Recovery Timer ? Load from Storage ? Back to Channel
+Publish() → Channel → Background Workers
+        ↘
+         Persist() → Storage
+              ↘
+         Recovery → Channel
 ```
 
 ## Performance Benchmarks
 
-BenchmarkDotNet results on .NET 9 (Intel Core i7-13620H):
+Latest request benchmark excerpt (.NET 9.0.11, Intel i7-13620H, single run):
 
-### Request Processing
-| Method | Mean | Error | StdDev | Allocated | Throughput |
-|--------|------|-------|---------|-----------|------------|
-| SingleRequest | 92.80 ns | 0.78 ns | 0.73 ns | 680 B | ~10.8M req/sec |
-| BatchRequests100 | 9.14 ?s | 0.11 ?s | 0.10 ?s | 64 KB | ~109K batches/sec |
+| Method                       | Mean (ns) | Allocated (B) | Approx Throughput (ops/sec) |
+|-----------------------------|----------:|--------------:|----------------------------:|
+| SimpleRequestResponse        | 94.66     | 672           | ~10.56 M                    |
+| ComplexRequestResponse       | 120.36    | 688           | ~8.31 M                     |
+| SimpleRequestWithoutResponse | 98.39     | 240           | ~10.16 M                    |
+| RequestWith1000Iterations*   | 103.45    | 644           | ~9.66 M (avg/op)            |
 
-### Notification Processing  
-| Method | Mean | Error | StdDev | Allocated | Throughput |
-|--------|------|-------|---------|-----------|------------|
-| SingleNotification | 377.45 ns | 5.13 ns | 4.80 ns | 726 B | ~2.6M notifs/sec |
-| BatchNotifications100 | 41.72 ?s | 0.62 ?s | 0.55 ?s | 80 KB | ~24K batches/sec |
+*Batch of 1000 requests total ≈103,448 ns (≈103.45 ns each).
 
-### Performance Highlights
-- **Blazing requests**: 93ns per request - one of the fastest mediators available
-- **Ultra-fast notifications**: 377ns with background processing
-- **Outstanding throughput**: 10.8 million requests per second capability
-- **Efficient batch processing**: 100 requests in 9.1?s  
-- **Low memory usage**: Optimized allocations with compiled delegates
-- **Pipeline behavior support**: Full hot path optimization for behaviors too
-- **ConfigureAwait overhead**: Zero performance impact when not used
-- **Enterprise-grade performance**: Perfect for hyperscale production systems
+Latest notification benchmark excerpt (.NET 9.0.11, Intel i7-13620H, single run):
+
+| Method                     | Mean (ms) | Allocated (B) |
+|---------------------------|----------:|--------------:|
+| PublishSimpleNotification  | 15.85     | 950           |
+| PublishComplexNotification | 16.00     | 936           |
+| Publish100Notifications    | 56.09     | 27,261        |
+| Publish1000Notifications   | 105.54    | 270,549       |
+
+Notes:
+- Notification benchmarks include enqueue + background processing overhead.
+- Allocation scales primarily with handler count and batch size.
+- Single notification latency dominated by worker scheduling (intentionally decoupled).
+
+### Highlights
+- Precompiled delegates (AOT-friendly)
+- Immutable work item struct
+- Pooled task arrays for multi-handler fan-out
+- Fast-path synchronous completions
+- Exponential retry with precomputed delays
+
+> Numbers from a single run; re-run on your hardware for authoritative results.
 
 Run benchmarks:
 ```bash
 cd benchmarks
-dotnet run -c Release
+DOTNET_TieredPGO=1 DOTNET_ReadyToRun=0 dotnet run -c Release --filter *Request*
+DOTNET_TieredPGO=1 DOTNET_ReadyToRun=0 dotnet run -c Release --filter *Publish*
 ```
 
 ## Testing
 
 ```bash
 dotnet test
-
-cd benchmarks
-dotnet run -c Release
 ```
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Make your changes and add tests
-4. Run benchmarks to ensure performance
-5. Commit your changes: `git commit -m 'Add amazing feature'`
-6. Push to the branch: `git push origin feature/amazing-feature`
-7. Open a Pull Request
+3. Add changes + tests
+4. Run benchmarks
+5. Commit: `git commit -m 'Add amazing feature'`
+6. Push: `git push origin feature/amazing-feature`
+7. Open PR
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE).
 
 ## Support
 
-- Create an issue for bug reports or feature requests
-- Check existing issues before creating new ones
-- Provide clear reproduction steps for bugs
+Open issues for bugs or features. Provide clear reproduction steps.
 
 ## Appreciation (Optional)
 
-SwartBerg.Mediator is completely free and always will be. Use it, modify it, distribute it - no strings attached! 
-
-If this library happens to save you time or makes your project better, and you feel like buying me a coffee out of the goodness of your heart, that's awesome but totally optional:
+Free forever. If it helps you and you want to buy a coffee:
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/swartbergstudio)
 
-**Remember: This library will always be free, regardless of donations. No premium features, no paid support, no strings attached.**
+**Always free. No premium features, no paid support.**
