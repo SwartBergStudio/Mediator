@@ -28,7 +28,7 @@ public static class MediatorServiceCollectionExtensions
         if (configureOptions != null)
             services.Configure(configureOptions);
 
-        services.AddScoped<IMediator, Core.Mediator>();
+        services.AddSingleton<IMediator, Core.Mediator>();
 
         services.TryAddSingleton<INotificationPersistence, FileNotificationPersistence>();
         services.TryAddSingleton<INotificationSerializer, JsonNotificationSerializer>();
