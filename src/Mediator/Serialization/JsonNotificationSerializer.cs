@@ -17,9 +17,9 @@ namespace Mediator.Serialization
 
         /// <inheritdoc />
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public object? Deserialize(string serializedNotification, Type notificationType)
+        public object? Deserialize(string? serializedNotification, Type notificationType)
         {
-            if (string.IsNullOrEmpty(serializedNotification))
+            if (string.IsNullOrWhiteSpace(serializedNotification))
                 return null;
 
             try
@@ -34,8 +34,11 @@ namespace Mediator.Serialization
 
         /// <inheritdoc />
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public string Serialize(object notification, Type notificationType)
+        public string Serialize(object? notification, Type notificationType)
         {
+            if (notification is null)
+                return "null";
+
             try
             {
                 return JsonSerializer.Serialize(notification, notificationType, Options);

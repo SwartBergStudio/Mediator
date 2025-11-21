@@ -3,11 +3,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mediator", "src\Mediator.csproj", "{75EBF978-CAA5-DE98-E24C-6FC053203D1C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mediator", "src\Mediator\Mediator.csproj", "{75EBF978-CAA5-DE98-E24C-6FC053203D1C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mediator.Tests", "tests\Mediator.Tests.csproj", "{E6D4A24A-9946-1FEC-AE8F-CF816AD5E10E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mediator.Tests", "src\tests\Mediator.Tests.csproj", "{E6D4A24A-9946-1FEC-AE8F-CF816AD5E10E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mediator.Benchmarks", "benchmarks\Mediator.Benchmarks.csproj", "{E42BE3D9-E857-4EC9-58E5-87DF848B9ABC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mediator.Benchmarks", "src\benchmarks\Mediator.Benchmarks.csproj", "{E42BE3D9-E857-4EC9-58E5-87DF848B9ABC}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

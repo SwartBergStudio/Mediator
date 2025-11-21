@@ -38,7 +38,7 @@ namespace Mediator.Tests
 
             var content = await File.ReadAllTextAsync(filePath);
             Assert.Contains("Test message", content);
-            Assert.Contains(typeof(TestNotification).AssemblyQualifiedName, content);
+            Assert.Contains(typeof(TestNotification).AssemblyQualifiedName!, content);
         }
 
         [Fact]
@@ -117,7 +117,7 @@ namespace Mediator.Tests
             var updatedItem = pendingItems.FirstOrDefault(x => x.Id == id);
             
             Assert.NotNull(updatedItem);
-            Assert.Equal(1, updatedItem.AttemptCount);
+            Assert.Equal(1, updatedItem!.AttemptCount);
         }
 
         [Fact]

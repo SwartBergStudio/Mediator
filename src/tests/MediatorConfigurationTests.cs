@@ -114,13 +114,17 @@ namespace Mediator.Tests
 
     public class CustomNotificationSerializer : INotificationSerializer
     {
-        public object? Deserialize(string serializedNotification, Type notificationType)
+        public object? Deserialize(string? serializedNotification, Type notificationType)
         {
+            if (string.IsNullOrWhiteSpace(serializedNotification))
+                return null;
             return Activator.CreateInstance(notificationType);
         }
 
-        public string Serialize(object notification, Type notificationType)
+        public string Serialize(object? notification, Type notificationType)
         {
+            if (notification is null)
+                return "null";
             return "{}";
         }
     }

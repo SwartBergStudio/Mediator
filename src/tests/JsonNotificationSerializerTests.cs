@@ -37,7 +37,7 @@ namespace Mediator.Tests
             var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
             var deserialized = JsonSerializer.Deserialize<TestNotification>(result, options);
             Assert.NotNull(deserialized);
-            Assert.Equal(notification.Message, deserialized.Message);
+            Assert.Equal(notification.Message, deserialized!.Message);
         }
 
         [Fact]
@@ -56,7 +56,7 @@ namespace Mediator.Tests
 
             // Assert
             Assert.NotNull(result);
-            Assert.Equal(originalNotification.Message, result.Message);
+            Assert.Equal(originalNotification.Message, result!.Message);
             Assert.Equal(originalNotification.CreatedAt, result.CreatedAt);
         }
 
@@ -93,7 +93,7 @@ namespace Mediator.Tests
 
             // Assert
             Assert.NotNull(deserialized);
-            Assert.Equal(originalNotification.Id, deserialized.Id);
+            Assert.Equal(originalNotification.Id, deserialized!.Id);
             Assert.Equal(originalNotification.Message, deserialized.Message);
             Assert.Equal(originalNotification.Tags.Length, deserialized.Tags.Length);
         }
