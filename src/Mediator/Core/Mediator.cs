@@ -48,11 +48,6 @@ public sealed class Mediator : IMediator, IDisposable
     /// <summary>
     /// Initializes a new mediator using Microsoft.Extensions options binding.
     /// </summary>
-    /// <param name="serviceProvider">Service provider used to resolve handlers and behaviors.</param>
-    /// <param name="logger">Logger instance.</param>
-    /// <param name="options">Configured mediator options.</param>
-    /// <param name="persistence">Notification persistence implementation.</param>
-    /// <param name="serializer">Notification serializer implementation.</param>
     public Mediator(
         IServiceProvider serviceProvider,
         ILogger<Mediator> logger,
@@ -66,11 +61,6 @@ public sealed class Mediator : IMediator, IDisposable
     /// <summary>
     /// Initializes a new mediator using a direct options instance.
     /// </summary>
-    /// <param name="serviceProvider">Service provider used to resolve handlers and behaviors.</param>
-    /// <param name="logger">Logger instance.</param>
-    /// <param name="options">Mediator options.</param>
-    /// <param name="persistence">Notification persistence implementation.</param>
-    /// <param name="serializer">Notification serializer implementation.</param>
     public Mediator(
         IServiceProvider serviceProvider,
         ILogger<Mediator> logger,
@@ -159,10 +149,10 @@ public sealed class Mediator : IMediator, IDisposable
     /// <summary>
     /// Sends a request and awaits a response from the appropriate handler.
     /// </summary>
-    /// <typeparam name="TResponse">Response type.</typeparam>
+    /// <typeparam name="TResponse">The response type.</typeparam>
     /// <param name="request">The request instance.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The response from the handler.</returns>
+    /// <returns>The response produced by the handler.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
@@ -213,7 +203,7 @@ public sealed class Mediator : IMediator, IDisposable
     }
 
     /// <summary>
-    /// Sends a command (no response) to its handler.
+    /// Sends a command without response to its handler.
     /// </summary>
     /// <typeparam name="TRequest">Request type.</typeparam>
     /// <param name="request">The request instance.</param>
@@ -232,7 +222,7 @@ public sealed class Mediator : IMediator, IDisposable
     }
 
     /// <summary>
-    /// Sends a command (no response) to its handler.
+    /// Sends a non-generic command without response to its handler.
     /// </summary>
     /// <param name="request">The request instance.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -249,7 +239,8 @@ public sealed class Mediator : IMediator, IDisposable
     }
 
     /// <summary>
-    /// Publishes a notification to all matching handlers. Processing is done in background workers.
+    /// Publishes a notification to all registered handlers for background processing.
+    /// Each handler runs in its own scope in parallel.
     /// </summary>
     /// <typeparam name="TNotification">Notification type.</typeparam>
     /// <param name="notification">The notification instance.</param>
@@ -467,17 +458,17 @@ public sealed class Mediator : IMediator, IDisposable
     {
         var notificationType = workItem.NotificationType!;
         var notification = workItem.Notification!;
-        using var scope = _serviceProvider.CreateScope();
-        var scopedProvider = scope.ServiceProvider;
         var token = _cancellationTokenSource.Token;
 
-        var handlers = GetCachedNotificationHandlers(notificationType, scopedProvider);
+        // Discovery scope just to obtain current handler instances and their concrete types.
+        using var discoveryScope = _serviceProvider.CreateScope();
+        var handlerInstances = GetCachedNotificationHandlers(notificationType, discoveryScope.ServiceProvider);
 
-        if (handlers.Length == 0)
+        if (handlerInstances.Length == 0)
         {
             if (_notificationHandlerCache.TryGetValue(notificationType, out var cached) && cached.Length > 0)
             {
-                _logger.LogWarning("Scoped resolution returned zero handlers for {NotificationType} while cache had {CachedCount}", notificationType.Name, cached.Length);
+                _logger.LogWarning("Scoped discovery returned zero handlers for {NotificationType} while cache had {CachedCount}", notificationType.Name, cached.Length);
             }
             else
             {
@@ -487,54 +478,79 @@ public sealed class Mediator : IMediator, IDisposable
         }
 
         var invoker = GetOrCreateNotificationInvoker(notificationType);
-        
-        if (handlers.Length == 1)
+        var handlerInterfaceType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
+
+        if (handlerInstances.Length == 1)
         {
-            try
+            await InvokeHandlerInOwnScope(invoker, handlerInterfaceType, handlerInstances[0]!, notification, token).ConfigureAwait(false);
+            return;
+        }
+
+        var pool = ArrayPool<Task>.Shared;
+        var tasks = pool.Rent(handlerInstances.Length);
+        var count = handlerInstances.Length;
+        try
+        {
+            for (int i = 0; i < count; i++)
             {
-                var t = invoker(handlers[0]!, notification, token);
-                if (t.IsCompletedSuccessfully) return;
-                if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
+                tasks[i] = InvokeHandlerInOwnScope(invoker, handlerInterfaceType, handlerInstances[i]!, notification, token);
             }
-            catch (Exception ex)
+            if (_options.UseConfigureAwaitGlobally)
             {
-                _logger.LogWarning(ex, "Notification handler {HandlerType} failed", handlers[0]?.GetType().Name ?? "Unknown");
+                for (int i = 0; i < count; i++)
+                {
+                    var t = tasks[i];
+                    if (!t.IsCompletedSuccessfully) await t.ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    var t = tasks[i];
+                    if (!t.IsCompletedSuccessfully) await t;
+                }
             }
         }
-        else
+        finally
         {
-            var pool = ArrayPool<Task>.Shared;
-            var tasks = pool.Rent(handlers.Length);
-            var count = handlers.Length;
-            try
+            for (int i = 0; i < count; i++) tasks[i] = null!;
+            pool.Return(tasks);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private async Task InvokeHandlerInOwnScope(Func<object, object, CancellationToken, Task> invoker, Type handlerInterfaceType, object discoveredHandlerInstance, object notification, CancellationToken token)
+    {
+        var concreteType = discoveredHandlerInstance.GetType();
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var scopedHandlers = scope.ServiceProvider.GetServices(handlerInterfaceType);
+            object? target = null;
+            foreach (var h in scopedHandlers)
             {
-                for (var i = 0; i < count; i++)
+                if (h != null && h.GetType() == concreteType)
                 {
-                    var handler = handlers[i];
-                    tasks[i] = ProcessSingleHandler(invoker, handler!, notification, token);
-                }
-                if (_options.UseConfigureAwaitGlobally)
-                {
-                    for (int i = 0; i < count; i++)
-                    {
-                        var t = tasks[i];
-                        if (!t.IsCompletedSuccessfully) await t.ConfigureAwait(false);
-                    }
-                }
-                else
-                {
-                    for (int i = 0; i < count; i++)
-                    {
-                        var t = tasks[i];
-                        if (!t.IsCompletedSuccessfully) await t;
-                    }
+                    target = h;
+                    break;
                 }
             }
-            finally
+            if (target == null)
             {
-                for (var i = 0; i < count; i++) tasks[i] = null!;
-                pool.Return(tasks);
+                _logger.LogWarning("Failed to resolve handler {HandlerType} in isolated scope", concreteType.Name);
+                return;
             }
+
+            var t = invoker(target, notification, token);
+            if (!t.IsCompletedSuccessfully)
+            {
+                if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Notification handler {HandlerType} failed", concreteType.Name);
         }
     }
 
