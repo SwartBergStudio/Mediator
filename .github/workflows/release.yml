@@ -50,9 +50,9 @@ jobs:
     - name: Update project version
       run: |
         # Update the main project file
-        sed -i "s/<Version>.*<\/Version>/<Version>${{ steps.gitversion.outputs.nuGetVersionV2 }}<\/Version>/" src/Mediator.csproj
-        sed -i "s/<AssemblyVersion>.*<\/AssemblyVersion>/<AssemblyVersion>${{ steps.gitversion.outputs.assemblySemVer }}<\/AssemblyVersion>/" src/Mediator.csproj
-        sed -i "s/<FileVersion>.*<\/FileVersion>/<FileVersion>${{ steps.gitversion.outputs.assemblySemFileVer }}<\/FileVersion>/" src/Mediator.csproj
+        sed -i "s/<Version>.*<\/Version>/<Version>${{ steps.gitversion.outputs.nuGetVersionV2 }}<\/Version>/" src/Mediator/Mediator.csproj
+        sed -i "s/<AssemblyVersion>.*<\/AssemblyVersion>/<AssemblyVersion>${{ steps.gitversion.outputs.assemblySemVer }}<\/AssemblyVersion>/" src/Mediator/Mediator.csproj
+        sed -i "s/<FileVersion>.*<\/FileVersion>/<FileVersion>${{ steps.gitversion.outputs.assemblySemFileVer }}<\/FileVersion>/" src/Mediator/Mediator.csproj
         
     - name: Commit version update
       env:
@@ -61,7 +61,7 @@ jobs:
         if [ -n "$PAT_TOKEN" ]; then
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add src/Mediator.csproj
+          git add src/Mediator/Mediator.csproj
           git diff --cached --quiet || git commit -m "chore: bump version to ${{ steps.gitversion.outputs.nuGetVersionV2 }} [skip ci]"
           git push
         else
@@ -78,7 +78,7 @@ jobs:
       run: dotnet test --no-build --configuration Release --verbosity normal
       
     - name: Pack NuGet package
-      run: dotnet pack src/Mediator.csproj --no-build --configuration Release --output ./packages
+      run: dotnet pack src/Mediator/Mediator.csproj --no-build --configuration Release --output ./packages
       
     - name: Push to NuGet
       if: env.NUGET_API_KEY != ''
