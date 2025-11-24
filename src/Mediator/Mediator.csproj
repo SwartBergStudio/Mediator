@@ -56,4 +56,12 @@
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" />
   </ItemGroup>
 
+  <!-- Ensure README is included in NuGet package when specified by PackageReadmeFile -->
+  <ItemGroup>
+    <None Include="..\README.md">
+      <Pack>true</Pack>
+      <PackagePath>README.md</PackagePath>
+    </None>
+  </ItemGroup>
+
 </Project>
