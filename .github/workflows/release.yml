@@ -76,7 +76,18 @@ jobs:
       
     - name: Test
       run: dotnet test --no-build --configuration Release --verbosity normal
-      
+
+    - name: Ensure README exists next to project for NuGet pack
+      run: |
+        if [ -f README.md ]; then
+          echo "Copying repository README.md to src/Mediator/README.md for NuGet package"
+          
+          printf "Package-Version: ${{ steps.gitversion.outputs.nuGetVersionV2 }}\n\n" > src/Mediator/README.md
+          cat README.md >> src/Mediator/README.md
+        else
+          echo "README.md not found at repo root, skipping copy"
+        fi
+
     - name: Pack NuGet package
       run: dotnet pack src/Mediator/Mediator.csproj --no-build --configuration Release --output ./packages
       
