@@ -12,7 +12,6 @@ namespace Mediator.Core;
 
 /// <summary>
 /// High-performance mediator with background processing, optional persistence, and pipeline behaviors.
-/// AOT-friendly invokers and minimized allocations for fast throughput.
 /// </summary>
 public sealed class Mediator : IMediator, IDisposable
 {
@@ -156,13 +155,15 @@ public sealed class Mediator : IMediator, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
+        using var scope = _serviceProvider.CreateScope();
+        var scopedProvider = scope.ServiceProvider;
         var requestType = request.GetType();
-        var behaviors = GetCachedBehaviors(requestType, typeof(TResponse));
+        var behaviors = GetScopedBehaviors(requestType, typeof(TResponse), scopedProvider);
         if (behaviors.Length > 0)
-            return await SendWithBehaviors<TResponse>(request, behaviors, requestType, cancellationToken);
+            return await SendWithBehaviors<TResponse>(request, behaviors, requestType, cancellationToken, scopedProvider);
         
         var invoker = GetOrCreateRequestInvoker(requestType, typeof(TResponse));
-        var handler = GetCachedHandler(requestType, typeof(TResponse));
+        var handler = GetScopedHandler(requestType, typeof(TResponse), scopedProvider);
 
         var task = invoker(handler, request, cancellationToken);
         if (task.IsCompletedSuccessfully)
@@ -174,11 +175,21 @@ public sealed class Mediator : IMediator, IDisposable
             return (TResponse)await task;
     }
 
+    /// <summary>
+    /// Sends a request with pipeline behaviors if present.
+    /// </summary>
+    /// <typeparam name="TResponse">The response type.</typeparam>
+    /// <param name="request">The request instance.</param>
+    /// <param name="behaviors">Pipeline behaviors to apply.</param>
+    /// <param name="requestType">The request type.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="scopedProvider">The scoped service provider.</param>
+    /// <returns>The response produced by the handler.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private async Task<TResponse> SendWithBehaviors<TResponse>(IRequest<TResponse> request, object[] behaviors, Type requestType, CancellationToken cancellationToken)
+    private async Task<TResponse> SendWithBehaviors<TResponse>(IRequest<TResponse> request, object[] behaviors, Type requestType, CancellationToken cancellationToken, IServiceProvider scopedProvider)
     {
         var requestInvoker = GetOrCreateRequestInvoker(requestType, typeof(TResponse));
-        var handler = GetCachedHandler(requestType, typeof(TResponse));
+        var handler = GetScopedHandler(requestType, typeof(TResponse), scopedProvider);
 
         Func<Task<object>> handlerDelegate = () => requestInvoker(handler, request, cancellationToken);
 
@@ -212,9 +223,11 @@ public sealed class Mediator : IMediator, IDisposable
     public async Task Send<TRequest>(TRequest request, CancellationToken cancellationToken = default)
         where TRequest : IRequest
     {
+        using var scope = _serviceProvider.CreateScope();
+        var scopedProvider = scope.ServiceProvider;
         var requestType = typeof(TRequest);
         var invoker = GetOrCreateCommandInvoker(requestType);
-        var handler = GetCachedHandler(requestType, null);
+        var handler = GetScopedHandler(requestType, null, scopedProvider);
 
         var task = invoker(handler, request!, cancellationToken);
         if (task.IsCompletedSuccessfully) return;
@@ -229,9 +242,11 @@ public sealed class Mediator : IMediator, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task Send(IRequest request, CancellationToken cancellationToken = default)
     {
+        using var scope = _serviceProvider.CreateScope();
+        var scopedProvider = scope.ServiceProvider;
         var requestType = request.GetType();
         var invoker = GetOrCreateCommandInvoker(requestType);
-        var handler = GetCachedHandler(requestType, null);
+        var handler = GetScopedHandler(requestType, null, scopedProvider);
 
         var task = invoker(handler, request, cancellationToken);
         if (task.IsCompletedSuccessfully) return;
@@ -288,20 +303,36 @@ public sealed class Mediator : IMediator, IDisposable
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private object[] GetCachedBehaviors(Type requestType, Type responseType)
+    /// <summary>
+    /// Disposes the mediator, stopping background processing and releasing resources.
+    /// </summary>
+    public void Dispose()
     {
-        return _behaviorCache.GetOrAdd((requestType, responseType), _ =>
+        if (_disposed) return;
+
+        _cancellationTokenSource.Cancel();
+        _channelWriter.Complete();
+        
+        if (_backgroundTasks.Length > 0)
         {
-            var behaviorType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, responseType);
-            var services = _serviceProvider.GetServices(behaviorType);
-            var list = new List<object>();
-            foreach (var svc in services)
+            try { Task.WaitAll(_backgroundTasks, TimeSpan.FromSeconds(2)); } catch { }
+        }
+
+        try
+        {
+            if (_recoveryLoop != null || _cleanupLoop != null)
             {
-                if (svc != null) list.Add(svc);
+                var list = new List<Task>(2);
+                if (_recoveryLoop != null) list.Add(_recoveryLoop);
+                if (_cleanupLoop != null) list.Add(_cleanupLoop);
+                Task.WhenAll(list).Wait(TimeSpan.FromSeconds(2));
             }
-            return list.ToArray();
-        });
+        }
+        catch { }
+        
+        _cancellationTokenSource.Dispose();
+        
+        _disposed = true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -460,7 +491,6 @@ public sealed class Mediator : IMediator, IDisposable
         var notification = workItem.Notification!;
         var token = _cancellationTokenSource.Token;
 
-        // Discovery scope just to obtain current handler instances and their concrete types.
         using var discoveryScope = _serviceProvider.CreateScope();
         var handlerInstances = GetCachedNotificationHandlers(notificationType, discoveryScope.ServiceProvider);
 
@@ -685,35 +715,25 @@ public sealed class Mediator : IMediator, IDisposable
         }
     }
 
-    /// <summary>
-    /// Disposes the mediator, stopping background processing and releasing resources.
-    /// </summary>
-    public void Dispose()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private object[] GetScopedBehaviors(Type requestType, Type responseType, IServiceProvider scopedProvider)
     {
-        if (_disposed) return;
-
-        _cancellationTokenSource.Cancel();
-        _channelWriter.Complete();
-        
-        if (_backgroundTasks.Length > 0)
+        var behaviorType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, responseType);
+        var services = scopedProvider.GetServices(behaviorType);
+        var list = new List<object>();
+        foreach (var svc in services)
         {
-            try { Task.WaitAll(_backgroundTasks, TimeSpan.FromSeconds(2)); } catch { }
+            if (svc != null) list.Add(svc);
         }
+        return list.ToArray();
+    }
 
-        try
-        {
-            if (_recoveryLoop != null || _cleanupLoop != null)
-            {
-                var list = new List<Task>(2);
-                if (_recoveryLoop != null) list.Add(_recoveryLoop);
-                if (_cleanupLoop != null) list.Add(_cleanupLoop);
-                Task.WhenAll(list).Wait(TimeSpan.FromSeconds(2));
-            }
-        }
-        catch { }
-        
-        _cancellationTokenSource.Dispose();
-        
-        _disposed = true;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private object GetScopedHandler(Type requestType, Type? responseType, IServiceProvider scopedProvider)
+    {
+        var handlerType = responseType != null 
+            ? GetOrCreateHandlerType(requestType, responseType)
+            : typeof(IRequestHandler<>).MakeGenericType(requestType);
+        return scopedProvider.GetService(handlerType) ?? throw new InvalidOperationException($"Handler not found: {handlerType.Name}");
     }
 }
