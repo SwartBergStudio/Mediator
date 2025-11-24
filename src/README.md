@@ -21,7 +21,6 @@ The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of
 - **Retry Logic**: Exponential backoff with precomputed delays
 - **Modern Async Patterns**: Optional global ConfigureAwait(false)
 - **Lightweight**: Low allocations, minimal deps
-- **AOT Friendly**: No Expression.Compile, predictable startup
 - **.NET 9 Ready**: Utilizes latest runtime improvements
 
 ## Requirements
@@ -222,7 +221,7 @@ Notes:
 - Single notification latency dominated by worker scheduling (intentionally decoupled).
 
 ### Highlights
-- Precompiled delegates (AOT-friendly)
+- Precompiled delegates
 - Immutable work item struct
 - Pooled task arrays for multi-handler fan-out
 - Fast-path synchronous completions
@@ -267,4 +266,4 @@ Free forever. If it helps you and you want to buy a coffee:
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/swartbergstudio)
 
-**Always free. No premium features, no paid support.**
+**Always free. No premium features, no paid support.****Always free. No premium features, no paid support.**
