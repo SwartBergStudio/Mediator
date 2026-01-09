@@ -6,7 +6,7 @@
 [![NuGet Downloads](https://img.shields.io/nuget/dt/SwartBerg.Mediator.svg)](https://www.nuget.org/packages/SwartBerg.Mediator/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A fast mediator implementation for .NET 9 with background processing and notification persistence.
+A fast mediator implementation for .NET 9+ with background processing and notification persistence.
 
 Inspired by MediatR, this library was created as a free alternative with similar patterns but optimized for performance and includes built-in persistence and background processing.
 
@@ -21,13 +21,13 @@ The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of
 - **Retry Logic**: Exponential backoff with precomputed delays
 - **Modern Async Patterns**: Optional global ConfigureAwait(false)
 - **Lightweight**: Low allocations, minimal deps
-- **.NET 9 Ready**: Utilizes latest runtime improvements
+- **.NET 9 & 10 Ready**: Utilizes latest runtime improvements
 
 ## Requirements
 
-- .NET 9.0 or later
+- .NET 9.0 or later (including .NET 10)
 - Works with:
-  - .NET 9+ applications
+  - .NET 9+ and .NET 10+ applications
   - .NET MAUI applications
   - Blazor applications
   - ASP.NET Core 9+ applications
