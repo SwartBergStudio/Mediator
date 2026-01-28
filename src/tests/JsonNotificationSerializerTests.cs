@@ -33,9 +33,8 @@ namespace Mediator.Tests
             Assert.True(result.Contains("Hello World") || result.Contains("hello world"), 
                 $"Expected JSON to contain 'Hello World' but got: {result}");
             
-            // Verify it's valid JSON by deserializing with custom options
-            var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-            var deserialized = JsonSerializer.Deserialize<TestNotification>(result, options);
+            // Verify it's valid JSON by deserializing with the serializer (handles type wrapper)
+            var deserialized = _serializer.Deserialize(result, typeof(TestNotification)) as TestNotification;
             Assert.NotNull(deserialized);
             Assert.Equal(notification.Message, deserialized!.Message);
         }
@@ -120,6 +119,36 @@ namespace Mediator.Tests
             // Assert
             Assert.Null(result); // Implementation catches exceptions and returns null
         }
+
+        [Fact]
+        public void Serialize_DerivedNotification_AsBaseType_ShouldPreserveDerivedProperties()
+        {
+            // Arrange
+            BaseNotification notification = new DerivedNotification
+            {
+                BaseMessage = "Base",
+                ExtraDetail = "Extra",
+                Number = 42
+            };
+
+            // Act
+            var json = _serializer.Serialize(notification, notification.GetType());
+            // Should contain both base and derived properties
+            Assert.Contains("Base", json);
+            Assert.Contains("Extra", json);
+            Assert.Contains("42", json);
+
+            // Deserialize as base type
+            var deserialized = _serializer.Deserialize(json, typeof(BaseNotification)) as BaseNotification;
+            Assert.NotNull(deserialized);
+            Assert.Equal("Base", deserialized.BaseMessage);
+
+            // Downcast to derived to check extra properties
+            var derived = deserialized as DerivedNotification;
+            Assert.NotNull(derived);
+            Assert.Equal("Extra", derived.ExtraDetail);
+            Assert.Equal(42, derived.Number);
+        }
     }
 
     // Additional test notification type for complex scenarios
@@ -130,5 +159,16 @@ namespace Mediator.Tests
         public DateTime CreatedAt { get; set; }
         public string[] Tags { get; set; } = Array.Empty<string>();
         public System.Collections.Generic.Dictionary<string, object> Metadata { get; set; } = new();
+    }
+
+    public class BaseNotification : INotification
+    {
+        public string BaseMessage { get; set; } = string.Empty;
+    }
+
+    public class DerivedNotification : BaseNotification
+    {
+        public string ExtraDetail { get; set; } = string.Empty;
+        public int Number { get; set; }
     }
 }

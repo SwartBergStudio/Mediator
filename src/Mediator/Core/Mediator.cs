@@ -289,7 +289,7 @@ public sealed class Mediator : IMediator, IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to persist notification, processing in-memory only");
+                _logger.LogError(ex, "Failed to persist notification, processing in-memory only");
             }
         }
 
@@ -374,17 +374,6 @@ public sealed class Mediator : IMediator, IDisposable
     {
         return _handlerTypeCache.GetOrAdd((requestType, responseType), _ => 
             typeof(IRequestHandler<,>).MakeGenericType(requestType, responseType));
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private object GetCachedHandler(Type requestType, Type? responseType)
-    {
-        var handlerType = responseType != null 
-            ? GetOrCreateHandlerType(requestType, responseType)
-            : typeof(IRequestHandler<>).MakeGenericType(requestType);
-            
-        return _handlerCache.GetOrAdd(handlerType, type => 
-            _serviceProvider.GetService(type) ?? throw new InvalidOperationException($"Handler not found: {type.Name}"));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -580,25 +569,9 @@ public sealed class Mediator : IMediator, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Notification handler {HandlerType} failed", concreteType.Name);
+            _logger.LogError(ex, "Notification handler {HandlerType} failed", concreteType.Name);
         }
     }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private async Task ProcessSingleHandler(Func<object, object, CancellationToken, Task> invoker, object handler, object notification, CancellationToken token)
-    {
-        try
-        {
-            var t = invoker(handler, notification, token);
-            if (t.IsCompletedSuccessfully) return;
-            if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Notification handler {HandlerType} failed", handler.GetType().Name);
-        }
-    }
-    
     private async Task RecoverNotificationsAsync()
     {
         if (!_options.EnablePersistence || _persistence == null) return;
