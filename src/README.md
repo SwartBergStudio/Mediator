@@ -6,9 +6,9 @@
 [![NuGet Downloads](https://img.shields.io/nuget/dt/SwartBerg.Mediator.svg)](https://www.nuget.org/packages/SwartBerg.Mediator/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A fast mediator implementation for .NET 9 with background processing and notification persistence.
+A mediator implementation for with background processing and notification persistence.
 
-Inspired by MediatR, this library was created as a free alternative with similar patterns but optimized for performance and includes built-in persistence and background processing.
+Inspired by MediatR, this library was created as a free alternative with similar patterns but includes built-in persistence and background processing.
 
 The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of my surname and my wife's maiden name.  If you like to thank me for the library buy me a coffee.  Link is at the bottom of this readme.
 
@@ -21,16 +21,15 @@ The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of
 - **Retry Logic**: Exponential backoff with precomputed delays
 - **Modern Async Patterns**: Optional global ConfigureAwait(false)
 - **Lightweight**: Low allocations, minimal deps
-- **.NET 9 Ready**: Utilizes latest runtime improvements
 
 ## Requirements
 
-- .NET 9.0 or later
+- .NET 8.0 or later
 - Works with:
-  - .NET 9+ applications
+  - .NET 8+ applications
   - .NET MAUI applications
   - Blazor applications
-  - ASP.NET Core 9+ applications
+  - ASP.NET 8+ Core applications
   - Console applications
   - WPF applications
   - WinForms applications
@@ -49,7 +48,7 @@ dotnet add package SwartBerg.Mediator
 
 ### PackageReference
 ```xml
-<PackageReference Include="SwartBerg.Mediator" Version="1.0.0" />
+<PackageReference Include="SwartBerg.Mediator" Version="2.0.3" />
 ```
 
 ## Quick Start
@@ -191,50 +190,12 @@ Publish() → Channel → Background Workers
          Persist() → Storage
               ↘
          Recovery → Channel
-```
 
-## Performance Benchmarks
+Performance improvements in recent updates:
 
-Latest request benchmark excerpt (.NET 9.0.11, Intel i7-13620H, single run):
-
-| Method                       | Mean (ns) | Allocated (B) | Approx Throughput (ops/sec) |
-|-----------------------------|----------:|--------------:|----------------------------:|
-| SimpleRequestResponse        | 94.66     | 672           | ~10.56 M                    |
-| ComplexRequestResponse       | 120.36    | 688           | ~8.31 M                     |
-| SimpleRequestWithoutResponse | 98.39     | 240           | ~10.16 M                    |
-| RequestWith1000Iterations*   | 103.45    | 644           | ~9.66 M (avg/op)            |
-
-*Batch of 1000 requests total ≈103,448 ns (≈103.45 ns each).
-
-Latest notification benchmark excerpt (.NET 9.0.11, Intel i7-13620H, single run):
-
-| Method                     | Mean (ms) | Allocated (B) |
-|---------------------------|----------:|--------------:|
-| PublishSimpleNotification  | 15.85     | 950           |
-| PublishComplexNotification | 16.00     | 936           |
-| Publish100Notifications    | 56.09     | 27,261        |
-| Publish1000Notifications   | 105.54    | 270,549       |
-
-Notes:
-- Notification benchmarks include enqueue + background processing overhead.
-- Allocation scales primarily with handler count and batch size.
-- Single notification latency dominated by worker scheduling (intentionally decoupled).
-
-### Highlights
-- Precompiled delegates
-- Immutable work item struct
-- Pooled task arrays for multi-handler fan-out
-- Fast-path synchronous completions
-- Exponential retry with precomputed delays
-
-> Numbers from a single run; re-run on your hardware for authoritative results.
-
-Run benchmarks:
-```bash
-cd benchmarks
-DOTNET_TieredPGO=1 DOTNET_ReadyToRun=0 dotnet run -c Release --filter *Request*
-DOTNET_TieredPGO=1 DOTNET_ReadyToRun=0 dotnet run -c Release --filter *Publish*
-```
+- Cached concrete handler factories for faster scoped resolution when dispatching notifications.
+- Notification handler type caching to avoid holding root-scoped instances and reduce allocations.
+- Delayed serialization during Publish to avoid unnecessary serialization when persistence is disabled or fails.
 
 ## Testing
 
@@ -266,4 +227,4 @@ Free forever. If it helps you and you want to buy a coffee:
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/swartbergstudio)
 
-**Always free. No premium features, no paid support.****Always free. No premium features, no paid support.**
+**Always free. No premium features, no paid support.****Always free.**
