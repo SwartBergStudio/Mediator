@@ -25,7 +25,7 @@ public sealed class Mediator : IMediator, IDisposable
     private readonly ChannelWriter<NotificationWorkItem> _channelWriter;
     private readonly ChannelReader<NotificationWorkItem> _channelReader;
     
-    private readonly ConcurrentDictionary<Type, object> _handlerCache = new();
+    // legacy cache removed - replaced by _handlerFactoryCache
     private readonly ConcurrentDictionary<(Type request, Type response), Func<object, object, CancellationToken, Task<object>>> _requestInvokers = new();
     private readonly ConcurrentDictionary<Type, Func<object, object, CancellationToken, Task>> _commandInvokers = new();
     private readonly ConcurrentDictionary<Type, Func<object, object, CancellationToken, Task>> _notificationInvokers = new();
@@ -33,9 +33,17 @@ public sealed class Mediator : IMediator, IDisposable
     private readonly ConcurrentDictionary<(Type request, Type response), object[]> _behaviorCache = new();
     private readonly ConcurrentDictionary<Type, Func<object, object, Func<Task<object>>, CancellationToken, Task<object>>> _behaviorInvokers = new();
     private readonly ConcurrentDictionary<Type, object[]> _notificationHandlerCache = new();
+    // Cache factories to resolve concrete handler instances from a scoped IServiceProvider
+    private readonly ConcurrentDictionary<Type, Func<IServiceProvider, object>> _handlerFactoryCache = new();
     
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly Task[] _backgroundTasks;
+
+    // Cache MethodInfo for generic invocations to avoid repeated GetMethod calls
+    private static readonly MethodInfo s_invokeBehaviorMethod = typeof(Mediator).GetMethod(nameof(InvokeBehavior), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo s_invokeRequestHandlerMethod = typeof(Mediator).GetMethod(nameof(InvokeRequestHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo s_invokeCommandHandlerMethod = typeof(Mediator).GetMethod(nameof(InvokeCommandHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo s_invokeNotificationHandlerMethod = typeof(Mediator).GetMethod(nameof(InvokeNotificationHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
 
     private Task? _recoveryLoop;
     private Task? _cleanupLoop;
@@ -43,6 +51,74 @@ public sealed class Mediator : IMediator, IDisposable
     private TimeSpan[] _retryDelays = Array.Empty<TimeSpan>();
     
     private bool _disposed;
+
+    // Helper to efficiently materialize IEnumerable<object?> to object[] with minimal allocations
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static object[] MaterializeObjects(IEnumerable<object?> source)
+    {
+        if (source is object[] oa)
+        {
+            int cnt = 0;
+            for (int i = 0; i < oa.Length; i++) if (oa[i] != null) cnt++;
+            if (cnt == oa.Length) return oa;
+            var outArr = new object[cnt];
+            int oi = 0;
+            for (int i = 0; i < oa.Length; i++) if (oa[i] != null) outArr[oi++] = oa[i]!;
+            return outArr;
+        }
+
+        if (source is System.Collections.ICollection coll)
+        {
+            var arr = new object[coll.Count];
+            int i = 0;
+            foreach (var s in source)
+            {
+                if (s != null) arr[i++] = s!;
+            }
+            if (i == arr.Length) return arr;
+            Array.Resize(ref arr, i);
+            return arr;
+        }
+
+        // Fallback
+        var list = new List<object>();
+        foreach (var s in source)
+        {
+            if (s != null) list.Add(s);
+        }
+        return list.ToArray();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static object[] MaterializeTypes(IEnumerable<object?> source)
+    {
+        if (source is object[] oa)
+        {
+            var outList = new List<object>(oa.Length);
+            for (int i = 0; i < oa.Length; i++) if (oa[i] != null) outList.Add(oa[i]!.GetType());
+            return outList.ToArray();
+        }
+
+        if (source is System.Collections.ICollection coll)
+        {
+            var arr = new object[coll.Count];
+            int i = 0;
+            foreach (var s in source)
+            {
+                if (s != null) arr[i++] = s.GetType();
+            }
+            if (i == arr.Length) return arr;
+            Array.Resize(ref arr, i);
+            return arr;
+        }
+
+        var list = new List<object>();
+        foreach (var s in source)
+        {
+            if (s != null) list.Add(s.GetType());
+        }
+        return list.ToArray();
+    }
 
     /// <summary>
     /// Initializes a new mediator using Microsoft.Extensions options binding.
@@ -264,33 +340,42 @@ public sealed class Mediator : IMediator, IDisposable
     public async Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
         where TNotification : INotification
     {
-        var notificationType = typeof(TNotification);
+        var notificationType = notification?.GetType() ?? typeof(TNotification);
+
+        // Delay serialization until we know persistence will be attempted to avoid
+        // paying serialization cost when persistence is disabled or when persistence fails.
         string? serializedNotification = null;
+        var workItem = default(NotificationWorkItem);
+
         if (_options.EnablePersistence && _persistence != null)
-        {
-            serializedNotification = _serializer.Serialize(notification, notificationType);
-        }
-
-        var workItem = new NotificationWorkItem(
-            notification,
-            notificationType,
-            DateTime.UtcNow,
-            serializedNotification ?? string.Empty);
-
-        if (_options.EnablePersistence && _persistence != null && !string.IsNullOrEmpty(serializedNotification))
         {
             try
             {
-                var persistTask = _persistence.PersistAsync(workItem, cancellationToken);
-                if (!persistTask.IsCompletedSuccessfully)
+                serializedNotification = _serializer.Serialize(notification, notificationType);
+                workItem = new NotificationWorkItem(notification, notificationType, DateTime.UtcNow, serializedNotification ?? string.Empty);
+
+                if (!string.IsNullOrEmpty(serializedNotification))
                 {
-                    if (_options.UseConfigureAwaitGlobally) await persistTask.ConfigureAwait(false); else await persistTask;
+                    var persistTask = _persistence.PersistAsync(workItem, cancellationToken);
+                    if (!persistTask.IsCompletedSuccessfully)
+                    {
+                        if (_options.UseConfigureAwaitGlobally) await persistTask.ConfigureAwait(false); else await persistTask;
+                    }
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to persist notification, processing in-memory only");
+                // Ensure we still create a work item for in-memory processing
+                if (workItem.Equals(default(NotificationWorkItem)))
+                {
+                    workItem = new NotificationWorkItem(notification, notificationType, DateTime.UtcNow, string.Empty);
+                }
             }
+        }
+        else
+        {
+            workItem = new NotificationWorkItem(notification, notificationType, DateTime.UtcNow, string.Empty);
         }
 
         if (!_channelWriter.TryWrite(workItem))
@@ -343,16 +428,13 @@ public sealed class Mediator : IMediator, IDisposable
             return ResolveNotificationHandlers(notificationType, scopedProvider);
         }
 
+        // Cache concrete handler types instead of resolved instances to avoid holding
+        // root-scoped instances and to enable fast resolution via factories in new scopes.
         return _notificationHandlerCache.GetOrAdd(notificationType, _ =>
         {
             var handlerType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
             var services = _serviceProvider.GetServices(handlerType);
-            var list = new List<object>();
-            foreach (var svc in services)
-            {
-                if (svc != null) list.Add(svc);
-            }
-            return list.ToArray();
+            return MaterializeTypes(services);
         });
     }
 
@@ -361,12 +443,17 @@ public sealed class Mediator : IMediator, IDisposable
     {
         var handlerType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
         var services = provider.GetServices(handlerType);
-        var list = new List<object>();
-        foreach (var svc in services)
+        var arr = MaterializeObjects(services);
+
+        // Populate factory cache for concrete handler types discovered during resolution.
+        // This allows resolving the same concrete type quickly from a new scope later.
+        for (int i = 0; i < arr.Length; i++)
         {
-            if (svc != null) list.Add(svc);
+            var concreteType = arr[i].GetType();
+            _handlerFactoryCache.GetOrAdd(concreteType, t => (IServiceProvider sp) => sp.GetService(t)!);
         }
-        return list.ToArray();
+
+        return arr;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -384,8 +471,7 @@ public sealed class Mediator : IMediator, IDisposable
             var genericArgs = behaviorType.GetGenericArguments();
             var requestType = genericArgs[0];
             var responseType = genericArgs[1];
-            var method = typeof(Mediator).GetMethod(nameof(InvokeBehavior), BindingFlags.NonPublic | BindingFlags.Static)!;
-            var generic = method.MakeGenericMethod(requestType, responseType);
+            var generic = s_invokeBehaviorMethod.MakeGenericMethod(requestType, responseType);
             return (Func<object, object, Func<Task<object>>, CancellationToken, Task<object>>)generic.CreateDelegate(typeof(Func<object, object, Func<Task<object>>, CancellationToken, Task<object>>));
         });
     }
@@ -410,8 +496,7 @@ public sealed class Mediator : IMediator, IDisposable
     {
         return _requestInvokers.GetOrAdd((requestType, responseType), _ =>
         {
-            var method = typeof(Mediator).GetMethod(nameof(InvokeRequestHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
-            var generic = method.MakeGenericMethod(requestType, responseType);
+            var generic = s_invokeRequestHandlerMethod.MakeGenericMethod(requestType, responseType);
             return (Func<object, object, CancellationToken, Task<object>>)generic.CreateDelegate(typeof(Func<object, object, CancellationToken, Task<object>>));
         });
     }
@@ -429,8 +514,7 @@ public sealed class Mediator : IMediator, IDisposable
     {
         return _commandInvokers.GetOrAdd(requestType, _ =>
         {
-            var method = typeof(Mediator).GetMethod(nameof(InvokeCommandHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
-            var generic = method.MakeGenericMethod(requestType);
+            var generic = s_invokeCommandHandlerMethod.MakeGenericMethod(requestType);
             return (Func<object, object, CancellationToken, Task>)generic.CreateDelegate(typeof(Func<object, object, CancellationToken, Task>));
         });
     }
@@ -447,8 +531,7 @@ public sealed class Mediator : IMediator, IDisposable
     {
         return _notificationInvokers.GetOrAdd(notificationType, _ =>
         {
-            var method = typeof(Mediator).GetMethod(nameof(InvokeNotificationHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
-            var generic = method.MakeGenericMethod(notificationType);
+            var generic = s_invokeNotificationHandlerMethod.MakeGenericMethod(notificationType);
             return (Func<object, object, CancellationToken, Task>)generic.CreateDelegate(typeof(Func<object, object, CancellationToken, Task>));
         });
     }
@@ -541,30 +624,45 @@ public sealed class Mediator : IMediator, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private async Task InvokeHandlerInOwnScope(Func<object, object, CancellationToken, Task> invoker, Type handlerInterfaceType, object discoveredHandlerInstance, object notification, CancellationToken token)
     {
-        var concreteType = discoveredHandlerInstance.GetType();
+        // discoveredHandlerInstance may be either a concrete instance (from scoped discovery)
+        // or a Type (when using cached types). Handle both cases.
+        Type concreteType;
+        if (discoveredHandlerInstance is Type ct) concreteType = ct; else concreteType = discoveredHandlerInstance.GetType();
         try
         {
             using var scope = _serviceProvider.CreateScope();
-            var scopedHandlers = scope.ServiceProvider.GetServices(handlerInterfaceType);
+            // Try fast-path: resolve via cached factory for the concrete type if available.
             object? target = null;
-            foreach (var h in scopedHandlers)
+            if (_handlerFactoryCache.TryGetValue(concreteType, out var factory))
             {
-                if (h != null && h.GetType() == concreteType)
+                try { target = factory(scope.ServiceProvider); }
+                catch { target = null; }
+            }
+
+            if (target == null)
+            {
+                // Fallback: enumerate scoped services and find matching concrete type.
+                var scopedHandlers = scope.ServiceProvider.GetServices(handlerInterfaceType);
+                foreach (var h in scopedHandlers)
                 {
-                    target = h;
-                    break;
+                    if (h != null && h.GetType() == concreteType)
+                    {
+                        target = h;
+                        break;
+                    }
                 }
             }
+
             if (target == null)
             {
                 _logger.LogWarning("Failed to resolve handler {HandlerType} in isolated scope", concreteType.Name);
                 return;
             }
 
-            var t = invoker(target, notification, token);
-            if (!t.IsCompletedSuccessfully)
+            var invocationTask = invoker(target, notification, token);
+            if (!invocationTask.IsCompletedSuccessfully)
             {
-                if (_options.UseConfigureAwaitGlobally) await t.ConfigureAwait(false); else await t;
+                if (_options.UseConfigureAwaitGlobally) await invocationTask.ConfigureAwait(false); else await invocationTask;
             }
         }
         catch (Exception ex)
