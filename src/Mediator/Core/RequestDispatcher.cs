@@ -33,22 +33,43 @@ internal sealed class RequestDispatcher : IRequestDispatcher
 
     public async Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
-        using var scope = _scopeProvider.CreateScope();
-        var scopedProvider = scope.ServiceProvider;
         var requestType = request.GetType();
-        var behaviors = GetScopedBehaviors(requestType, typeof(TResponse), scopedProvider);
+        _logger.LogInformation("Processing request {RequestType}", requestType.Name);
+        
+        try
+        {
+            using var scope = _scopeProvider.CreateScope();
+            var scopedProvider = scope.ServiceProvider;
+            var behaviors = GetScopedBehaviors(requestType, typeof(TResponse), scopedProvider);
+            _logger.LogDebug("Discovered {BehaviorCount} behaviors for {RequestType}", behaviors.Length, requestType.Name);
 
-        if (behaviors.Length > 0)
-            return await SendWithBehaviors<TResponse>(request, behaviors, requestType, cancellationToken, scopedProvider);
+            if (behaviors.Length > 0)
+            {
+                _logger.LogDebug("Executing request {RequestType} with {BehaviorCount} pipeline behaviors", requestType.Name, behaviors.Length);
+                return await SendWithBehaviors<TResponse>(request, behaviors, requestType, cancellationToken, scopedProvider);
+            }
 
-        var invoker = GetOrCreateRequestInvoker(requestType, typeof(TResponse));
-        var handler = GetScopedHandler(requestType, typeof(TResponse), scopedProvider);
+            var invoker = GetOrCreateRequestInvoker(requestType, typeof(TResponse));
+            var handler = GetScopedHandler(requestType, typeof(TResponse), scopedProvider);
+            _logger.LogDebug("Invoking handler for request {RequestType}", requestType.Name);
 
-        var task = invoker(handler, request, cancellationToken);
-        if (task.IsCompletedSuccessfully)
-            return (TResponse)task.GetAwaiter().GetResult();
+            var task = invoker(handler, request, cancellationToken);
+            if (task.IsCompletedSuccessfully)
+            {
+                var result = (TResponse)task.GetAwaiter().GetResult();
+                _logger.LogInformation("Request {RequestType} completed successfully", requestType.Name);
+                return result;
+            }
 
-        return (TResponse)await AwaitConfigurable(task);
+            var awaited = (TResponse)await AwaitConfigurable(task);
+            _logger.LogInformation("Request {RequestType} completed successfully", requestType.Name);
+            return awaited;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Request {RequestType} failed with exception", request.GetType().Name);
+            throw;
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -159,7 +180,14 @@ internal sealed class RequestDispatcher : IRequestDispatcher
     private object GetScopedHandler(Type requestType, Type responseType, IServiceProvider scopedProvider)
     {
         var handlerType = GetOrCreateHandlerType(requestType, responseType);
-        return scopedProvider.GetService(handlerType) ?? throw new InvalidOperationException($"Handler not found: {handlerType.Name}");
+        var handler = scopedProvider.GetService(handlerType);
+        if (handler == null)
+        {
+            _logger.LogError("Handler not found for request type {RequestType} returning {ResponseType}", requestType.Name, responseType.Name);
+            throw new InvalidOperationException($"Handler not found: {handlerType.Name}");
+        }
+        _logger.LogDebug("Resolved handler for request {RequestType} returning {ResponseType}", requestType.Name, responseType.Name);
+        return handler;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
