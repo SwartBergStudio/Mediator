@@ -563,8 +563,7 @@ public sealed class Mediator : IMediator, IDisposable
         var notification = workItem.Notification!;
         var token = _cancellationTokenSource.Token;
 
-        using var discoveryScope = _serviceProvider.CreateScope();
-        var handlerInstances = GetCachedNotificationHandlers(notificationType, discoveryScope.ServiceProvider);
+        var handlerInstances = GetCachedNotificationHandlers(notificationType, null);
 
         if (handlerInstances.Length == 0)
         {
