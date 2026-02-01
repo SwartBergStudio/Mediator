@@ -30,28 +30,60 @@ internal sealed class CommandDispatcher : ICommandDispatcher
     public async Task Send<TRequest>(TRequest request, CancellationToken cancellationToken = default)
         where TRequest : IRequest
     {
-        using var scope = _scopeProvider.CreateScope();
-        var scopedProvider = scope.ServiceProvider;
         var requestType = typeof(TRequest);
-        var invoker = GetOrCreateCommandInvoker(requestType);
-        var handler = GetScopedHandler(requestType, scopedProvider);
-
-        var task = invoker(handler, request!, cancellationToken);
-        if (task.IsCompletedSuccessfully) return;
-        await AwaitConfigurable(task);
+        _logger.LogInformation("Processing command {CommandType}", requestType.Name);
+        
+        try
+        {
+            using var scope = _scopeProvider.CreateScope();
+            var scopedProvider = scope.ServiceProvider;
+            var invoker = GetOrCreateCommandInvoker(requestType);
+            var handler = GetScopedHandler(requestType, scopedProvider);
+            
+            _logger.LogDebug("Invoking handler for command {CommandType}", requestType.Name);
+            var task = invoker(handler, request!, cancellationToken);
+            if (task.IsCompletedSuccessfully)
+            {
+                _logger.LogInformation("Command {CommandType} completed successfully", requestType.Name);
+                return;
+            }
+            await AwaitConfigurable(task);
+            _logger.LogInformation("Command {CommandType} completed successfully", requestType.Name);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Command {CommandType} failed with exception", requestType.Name);
+            throw;
+        }
     }
 
     public async Task Send(IRequest request, CancellationToken cancellationToken = default)
     {
-        using var scope = _scopeProvider.CreateScope();
-        var scopedProvider = scope.ServiceProvider;
         var requestType = request.GetType();
-        var invoker = GetOrCreateCommandInvoker(requestType);
-        var handler = GetScopedHandler(requestType, scopedProvider);
-
-        var task = invoker(handler, request, cancellationToken);
-        if (task.IsCompletedSuccessfully) return;
-        await AwaitConfigurable(task);
+        _logger.LogInformation("Processing command {CommandType}", requestType.Name);
+        
+        try
+        {
+            using var scope = _scopeProvider.CreateScope();
+            var scopedProvider = scope.ServiceProvider;
+            var invoker = GetOrCreateCommandInvoker(requestType);
+            var handler = GetScopedHandler(requestType, scopedProvider);
+            
+            _logger.LogDebug("Invoking handler for command {CommandType}", requestType.Name);
+            var task = invoker(handler, request, cancellationToken);
+            if (task.IsCompletedSuccessfully)
+            {
+                _logger.LogInformation("Command {CommandType} completed successfully", requestType.Name);
+                return;
+            }
+            await AwaitConfigurable(task);
+            _logger.LogInformation("Command {CommandType} completed successfully", requestType.Name);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Command {CommandType} failed with exception", requestType.Name);
+            throw;
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -84,6 +116,13 @@ internal sealed class CommandDispatcher : ICommandDispatcher
     private object GetScopedHandler(Type requestType, IServiceProvider scopedProvider)
     {
         var handlerType = typeof(IRequestHandler<>).MakeGenericType(requestType);
-        return scopedProvider.GetService(handlerType) ?? throw new InvalidOperationException($"Handler not found: {handlerType.Name}");
+        var handler = scopedProvider.GetService(handlerType);
+        if (handler == null)
+        {
+            _logger.LogError("Handler not found for command type {CommandType}", requestType.Name);
+            throw new InvalidOperationException($"Handler not found: {handlerType.Name}");
+        }
+        _logger.LogDebug("Resolved handler for command {CommandType}", requestType.Name);
+        return handler;
     }
 }
