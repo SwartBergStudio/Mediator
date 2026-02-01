@@ -1,8 +1,6 @@
-using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Mediator;
 
@@ -28,6 +26,10 @@ public static class MediatorServiceCollectionExtensions
         if (configureOptions != null)
             services.Configure(configureOptions);
 
+        services.AddSingleton<IScopeProvider, Core.DefaultScopeProvider>();
+        services.AddSingleton<IRequestDispatcher, Core.RequestDispatcher>();
+        services.AddSingleton<ICommandDispatcher, Core.CommandDispatcher>();
+        services.AddSingleton<INotificationPublisher, Core.NotificationPublisher>();
         services.AddSingleton<IMediator, Core.Mediator>();
 
         services.TryAddSingleton<INotificationPersistence, FileNotificationPersistence>();

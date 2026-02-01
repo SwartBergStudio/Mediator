@@ -1,6 +1,4 @@
 using BenchmarkDotNet.Attributes;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace Mediator.Benchmarks
 {
