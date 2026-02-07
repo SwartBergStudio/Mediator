@@ -35,7 +35,7 @@ namespace Mediator.Tests
             }
 
             await TestHelpers.WaitForCounterAsync(tracker, "MyObjectCreated", TimeSpan.FromSeconds(2));
-            tracker.GetCounter("MyObjectCreated").Should().BeGreaterThan(0);
+            tracker.GetCounter("MyObjectCreated").Should().Be(1, "Handler should be invoked exactly once");
         }
     }
 

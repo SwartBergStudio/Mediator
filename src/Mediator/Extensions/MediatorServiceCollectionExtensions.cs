@@ -46,6 +46,7 @@ public static class MediatorServiceCollectionExtensions
         if (assemblies.Length == 0) return;
 
         var registrations = new List<(Type service, Type implementation)>(256);
+        var seenRegistrations = new HashSet<(Type, Type)>();
 
         foreach (var assembly in assemblies)
         {
@@ -60,7 +61,11 @@ public static class MediatorServiceCollectionExtensions
                     if (interfaceType.IsGenericType &&
                         IsHandlerInterface(interfaceType.GetGenericTypeDefinition()))
                     {
-                        registrations.Add((interfaceType, type));
+                        var registration = (interfaceType, type);
+                        if (seenRegistrations.Add(registration))
+                        {
+                            registrations.Add(registration);
+                        }
                     }
                 }
             }
