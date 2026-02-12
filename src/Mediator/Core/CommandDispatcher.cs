@@ -31,7 +31,7 @@ internal sealed class CommandDispatcher : ICommandDispatcher
         where TRequest : IRequest
     {
         var requestType = typeof(TRequest);
-        _logger.LogInformation("Processing command {CommandType}", requestType.Name);
+        _logger.LogDebug("Processing command {CommandType}", requestType.Name);
         
         try
         {
@@ -44,11 +44,11 @@ internal sealed class CommandDispatcher : ICommandDispatcher
             var task = invoker(handler, request!, cancellationToken);
             if (task.IsCompletedSuccessfully)
             {
-                _logger.LogInformation("Command {CommandType} completed successfully", requestType.Name);
+                _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
                 return;
             }
-            await AwaitConfigurable(task);
-            _logger.LogInformation("Command {CommandType} completed successfully", requestType.Name);
+            await InternalHelpers.AwaitConfigurable(task, _options.UseConfigureAwaitGlobally);
+            _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
         }
         catch (Exception ex)
         {
@@ -60,39 +60,30 @@ internal sealed class CommandDispatcher : ICommandDispatcher
     public async Task Send(IRequest request, CancellationToken cancellationToken = default)
     {
         var requestType = request.GetType();
-        _logger.LogInformation("Processing command {CommandType}", requestType.Name);
-        
+        _logger.LogDebug("Processing command {CommandType}", requestType.Name);
+
         try
         {
             using var scope = _scopeProvider.CreateScope();
             var scopedProvider = scope.ServiceProvider;
             var invoker = GetOrCreateCommandInvoker(requestType);
             var handler = GetScopedHandler(requestType, scopedProvider);
-            
+
             _logger.LogDebug("Invoking handler for command {CommandType}", requestType.Name);
             var task = invoker(handler, request, cancellationToken);
             if (task.IsCompletedSuccessfully)
             {
-                _logger.LogInformation("Command {CommandType} completed successfully", requestType.Name);
+                _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
                 return;
             }
-            await AwaitConfigurable(task);
-            _logger.LogInformation("Command {CommandType} completed successfully", requestType.Name);
+            await InternalHelpers.AwaitConfigurable(task, _options.UseConfigureAwaitGlobally);
+            _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Command {CommandType} failed with exception", requestType.Name);
             throw;
         }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private async Task AwaitConfigurable(Task task)
-    {
-        if (_options.UseConfigureAwaitGlobally)
-            await task.ConfigureAwait(false);
-        else
-            await task;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

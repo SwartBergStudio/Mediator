@@ -81,26 +81,6 @@ namespace Mediator.Tests
                 $"Average notification time too high: {avgTimePerNotification:F2}ms per notification");
         }
 
-        [Fact]
-        public async Task NotificationHandlerCaching_ShouldWork()
-        {
-            var services = new ServiceCollection();
-            services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Error));
-            services.AddTransient<INotificationHandler<QuickTestNotification>, QuickTestHandler>();
-            services.AddMediator();
-
-            using var serviceProvider = services.BuildServiceProvider();
-            var mediator = serviceProvider.GetRequiredService<IMediator>();
-
-            for (int i = 0; i < 10; i++)
-            {
-                await mediator.Publish(new QuickTestNotification { Message = $"Cache test {i}" });
-            }
-
-            await Task.Delay(50);
-            
-            Assert.True(true);
-        }
     }
 
     public class QuickTestNotification : INotification

@@ -26,11 +26,11 @@ public static class MediatorServiceCollectionExtensions
         if (configureOptions != null)
             services.Configure(configureOptions);
 
-        services.AddSingleton<IScopeProvider, Core.DefaultScopeProvider>();
-        services.AddSingleton<IRequestDispatcher, Core.RequestDispatcher>();
-        services.AddSingleton<ICommandDispatcher, Core.CommandDispatcher>();
-        services.AddSingleton<INotificationPublisher, Core.NotificationPublisher>();
-        services.AddSingleton<IMediator, Core.Mediator>();
+        services.TryAddSingleton<IScopeProvider, Core.DefaultScopeProvider>();
+        services.TryAddSingleton<IRequestDispatcher, Core.RequestDispatcher>();
+        services.TryAddSingleton<ICommandDispatcher, Core.CommandDispatcher>();
+        services.TryAddSingleton<INotificationPublisher, Core.NotificationPublisher>();
+        services.TryAddSingleton<IMediator, Core.Mediator>();
 
         services.TryAddSingleton<INotificationPersistence, FileNotificationPersistence>();
         services.TryAddSingleton<INotificationSerializer, JsonNotificationSerializer>();
@@ -47,6 +47,18 @@ public static class MediatorServiceCollectionExtensions
 
         var registrations = new List<(Type service, Type implementation)>(256);
         var seenRegistrations = new HashSet<(Type, Type)>();
+
+        // Seed with existing handler registrations to prevent duplicates
+        // when AddMediator is called multiple times or handlers are manually registered
+        foreach (var descriptor in services)
+        {
+            if (descriptor.ImplementationType != null &&
+                descriptor.ServiceType.IsGenericType &&
+                IsHandlerInterface(descriptor.ServiceType.GetGenericTypeDefinition()))
+            {
+                seenRegistrations.Add((descriptor.ServiceType, descriptor.ImplementationType));
+            }
+        }
 
         foreach (var assembly in assemblies)
         {

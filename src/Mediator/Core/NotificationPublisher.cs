@@ -27,7 +27,6 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     private readonly ChannelReader<NotificationWorkItem> _channelReader;
 
     private readonly ConcurrentDictionary<Type, object[]> _notificationHandlerCache = new();
-    private readonly ConcurrentDictionary<Type, Func<IServiceProvider, object>> _concreteHandlerFactoryCache = new();
     private readonly ConcurrentDictionary<Type, Func<object, object, CancellationToken, Task>> _notificationInvokers = new();
 
     private static readonly MethodInfo s_invokeNotificationHandlerMethod = typeof(NotificationPublisher).GetMethod(nameof(InvokeNotificationHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -94,7 +93,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         where TNotification : INotification
     {
         var notificationType = notification?.GetType() ?? typeof(TNotification);
-        _logger.LogInformation("Publishing notification of type {NotificationType}", notificationType.Name);
+        _logger.LogDebug("Publishing notification of type {NotificationType}", notificationType.Name);
 
         string? serializedNotification = null;
         var workItem = default(NotificationWorkItem);
@@ -141,11 +140,11 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
                 {
                     await AwaitConfigurable(writeTask);
                 }
-                _logger.LogInformation("Notification {NotificationType} written to channel", notificationType.Name);
+                _logger.LogDebug("Notification {NotificationType} written to channel", notificationType.Name);
             }
             else
             {
-                _logger.LogInformation("Notification {NotificationType} written to channel (TryWrite succeeded)", notificationType.Name);
+                _logger.LogDebug("Notification {NotificationType} written to channel (TryWrite succeeded)", notificationType.Name);
             }
         }
         catch (Exception ex)
@@ -232,13 +231,8 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private async Task AwaitConfigurable(Task task)
-    {
-        if (_options.UseConfigureAwaitGlobally)
-            await task.ConfigureAwait(false);
-        else
-            await task;
-    }
+    private Task AwaitConfigurable(Task task)
+        => InternalHelpers.AwaitConfigurable(task, _options.UseConfigureAwaitGlobally);
 
     private async Task ProcessNotifications()
     {
@@ -290,7 +284,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         // Create a scope for handler resolution to ensure proper DI context
         using var scope = _scopeProvider.CreateScope();
         var handlerInstances = GetCachedNotificationHandlers(notificationType, scope.ServiceProvider);
-        _logger.LogInformation("Discovered {HandlerCount} handlers for notification type {NotificationType}", handlerInstances.Length, notificationType.Name);
+        _logger.LogDebug("Discovered {HandlerCount} handlers for notification type {NotificationType}", handlerInstances.Length, notificationType.Name);
 
         if (handlerInstances.Length == 0)
         {
@@ -334,7 +328,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
                     if (!t.IsCompletedSuccessfully) await t;
                 }
             }
-            _logger.LogInformation("All {HandlerCount} handlers completed successfully for {NotificationType}", count, notificationType.Name);
+            _logger.LogDebug("All {HandlerCount} handlers completed successfully for {NotificationType}", count, notificationType.Name);
         }
         catch (Exception ex)
         {
@@ -376,13 +370,6 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         var services = provider.GetServices(handlerType);
         var arr = MaterializeObjects(services);
         _logger.LogDebug("Resolved {HandlerCount} handler instances for {NotificationType} from scoped provider", arr.Length, notificationType.Name);
-
-        for (int i = 0; i < arr.Length; i++)
-        {
-            var concreteType = arr[i].GetType();
-            _concreteHandlerFactoryCache.GetOrAdd(concreteType, t => (IServiceProvider sp) => sp.GetService(t)!);
-        }
-
         return arr;
     }
 
@@ -432,7 +419,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
             {
                 await AwaitConfigurable(invocationTask);
             }
-            _logger.LogInformation("Handler {HandlerType} completed successfully", concreteType.Name);
+            _logger.LogDebug("Handler {HandlerType} completed successfully", concreteType.Name);
         }
         catch (Exception ex)
         {
@@ -448,11 +435,8 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         {
             _logger.LogDebug("Starting recovery of pending notifications");
             var pendingNotifications = await _persistence.GetPendingAsync(_options.ProcessingBatchSize, _cancellationTokenSource.Token).ConfigureAwait(false);
-            var pendingList = pendingNotifications.ToList();
-            _logger.LogInformation("Retrieved {PendingCount} pending notifications for recovery", pendingList.Count);
 
-
-            foreach (var persistedItem in pendingList)
+            foreach (var persistedItem in pendingNotifications)
             {
                 if (persistedItem == null) 
                 {
@@ -602,47 +586,10 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static T[] Materialize<T>(IEnumerable<object?> source, Func<object, T> selector)
-    {
-        if (source is object[] oa)
-        {
-            var outList = new List<T>(oa.Length);
-            for (int i = 0; i < oa.Length; i++)
-            {
-                if (oa[i] != null)
-                    outList.Add(selector(oa[i]!));
-            }
-            return outList.ToArray();
-        }
-
-        if (source is System.Collections.ICollection coll)
-        {
-            var arr = new T[coll.Count];
-            int i = 0;
-            foreach (var s in source)
-            {
-                if (s != null)
-                    arr[i++] = selector(s);
-            }
-            if (i == arr.Length) return arr;
-            Array.Resize(ref arr, i);
-            return arr;
-        }
-
-        var list = new List<T>();
-        foreach (var s in source)
-        {
-            if (s != null)
-                list.Add(selector(s));
-        }
-        return list.ToArray();
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static object[] MaterializeObjects(IEnumerable<object?> source)
-        => Materialize(source, obj => obj!);
+        => InternalHelpers.MaterializeObjects(source);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static object[] MaterializeTypes(IEnumerable<object?> source)
-        => Materialize(source, obj => (object)obj!.GetType());
+        => InternalHelpers.MaterializeTypes(source);
 }
