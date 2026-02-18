@@ -17,8 +17,9 @@ namespace Mediator.Core
 
         /// <summary>
         /// Whether to enable persistent storage for notifications.
+        /// When disabled, no persistence or serialization services are registered or initialized.
         /// </summary>
-        public bool EnablePersistence { get; set; } = true;
+        public bool EnablePersistence { get; set; } = false;
 
         /// <summary>
         /// Interval for processing persisted notifications.

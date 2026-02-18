@@ -32,8 +32,16 @@ public static class MediatorServiceCollectionExtensions
         services.TryAddSingleton<INotificationPublisher, Core.NotificationPublisher>();
         services.TryAddSingleton<IMediator, Core.Mediator>();
 
-        services.TryAddSingleton<INotificationPersistence, FileNotificationPersistence>();
-        services.TryAddSingleton<INotificationSerializer, JsonNotificationSerializer>();
+        // Only register persistence and serialization when explicitly enabled.
+        // Evaluate the options delegate to determine the flag at registration time.
+        var options = new MediatorOptions();
+        configureOptions?.Invoke(options);
+
+        if (options.EnablePersistence)
+        {
+            services.TryAddSingleton<INotificationPersistence, FileNotificationPersistence>();
+            services.TryAddSingleton<INotificationSerializer, JsonNotificationSerializer>();
+        }
 
         RegisterHandlers(services, assemblies);
 

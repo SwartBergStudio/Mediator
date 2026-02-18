@@ -19,8 +19,8 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     private readonly IScopeProvider _scopeProvider;
     private readonly ILogger<NotificationPublisher> _logger;
     private readonly MediatorOptions _options;
-    private readonly INotificationPersistence _persistence;
-    private readonly INotificationSerializer _serializer;
+    private readonly INotificationPersistence? _persistence;
+    private readonly INotificationSerializer? _serializer;
 
     private readonly Channel<NotificationWorkItem> _notificationChannel;
     private readonly ChannelWriter<NotificationWorkItem> _channelWriter;
@@ -44,19 +44,29 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         IServiceProvider serviceProvider,
         IScopeProvider scopeProvider,
         ILogger<NotificationPublisher> logger,
-        IOptions<MediatorOptions> options,
-        INotificationPersistence persistence,
-        INotificationSerializer serializer)
+        IOptions<MediatorOptions> options)
     {
         _serviceProvider = serviceProvider;
         _scopeProvider = scopeProvider;
         _logger = logger;
         _options = options.Value;
         SanitizeOptions(_options);
-        _persistence = persistence;
-        _serializer = serializer;
 
-        _logger.LogInformation("Initializing NotificationPublisher with EnablePersistence={EnablePersistence}, WorkerCount={WorkerCount}, ChannelCapacity={ChannelCapacity}", 
+        if (_options.EnablePersistence)
+        {
+            _persistence = serviceProvider.GetService(typeof(INotificationPersistence)) as INotificationPersistence;
+            _serializer = serviceProvider.GetService(typeof(INotificationSerializer)) as INotificationSerializer;
+
+            if (_persistence == null || _serializer == null)
+            {
+                _logger.LogWarning("Persistence enabled but required services (INotificationPersistence, INotificationSerializer) are not registered. Disabling persistence.");
+                _options.EnablePersistence = false;
+                _persistence = null;
+                _serializer = null;
+            }
+        }
+
+        _logger.LogInformation("Initializing NotificationPublisher with EnablePersistence={EnablePersistence}, WorkerCount={WorkerCount}, ChannelCapacity={ChannelCapacity}",
             _options.EnablePersistence, _options.NotificationWorkerCount, _options.ChannelCapacity);
 
         InitializeRetryDelays();
@@ -84,7 +94,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         {
             _recoveryLoop = Task.Run(() => RunPeriodic(_options.ProcessingInterval, RecoverNotificationsAsync, _cancellationTokenSource.Token, _logger), _cancellationTokenSource.Token);
             _cleanupLoop = Task.Run(() => RunPeriodic(_options.CleanupInterval, CleanupAsync, _cancellationTokenSource.Token, _logger), _cancellationTokenSource.Token);
-            _logger.LogInformation("Started recovery and cleanup loops with ProcessingInterval={ProcessingInterval}, CleanupInterval={CleanupInterval}", 
+            _logger.LogInformation("Started recovery and cleanup loops with ProcessingInterval={ProcessingInterval}, CleanupInterval={CleanupInterval}",
                 _options.ProcessingInterval, _options.CleanupInterval);
         }
     }
@@ -102,7 +112,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         {
             try
             {
-                serializedNotification = _serializer.Serialize(notification, notificationType);
+                serializedNotification = _serializer!.Serialize(notification, notificationType);
                 workItem = new NotificationWorkItem(notification, notificationType, DateTime.UtcNow, serializedNotification ?? string.Empty);
 
                 if (!string.IsNullOrEmpty(serializedNotification))
@@ -481,7 +491,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         try
         {
             _logger.LogDebug("Deserializing persisted notification {NotificationId}", persistedItem.Id);
-            var notification = _serializer.Deserialize(persistedItem.WorkItem.SerializedNotification, persistedItem.WorkItem.NotificationType!);
+            var notification = _serializer!.Deserialize(persistedItem.WorkItem.SerializedNotification, persistedItem.WorkItem.NotificationType!);
 
             if (notification == null)
             {
