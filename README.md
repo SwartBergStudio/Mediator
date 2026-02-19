@@ -192,29 +192,6 @@ Publish() ? Channel ? Background Workers
               ?
          Recovery ? Channel
 ```
-
-## Performance Benchmarks
-
-Latest request benchmark excerpt (.NET 9.0.11, Intel i7-13620H, single run):
-
-| Method                       | Mean (ns) | Allocated (B) | Approx Throughput (ops/sec) |
-|-----------------------------|----------:|--------------:|----------------------------:|
-| SimpleRequestResponse        | 94.66     | 672           | ~10.56 M                    |
-| ComplexRequestResponse       | 120.36    | 688           | ~8.31 M                     |
-| SimpleRequestWithoutResponse | 98.39     | 240           | ~10.16 M                    |
-| RequestWith1000Iterations*   | 103.45    | 644           | ~9.66 M (avg/op)            |
-
-*Batch of 1000 requests total ?103,448 ns (?103.45 ns each).
-
-Latest notification benchmark excerpt (.NET 9.0.11, Intel i7-13620H, single run):
-
-| Method                     | Mean (ms) | Allocated (B) |
-|---------------------------|----------:|--------------:|
-| PublishSimpleNotification  | 15.85     | 950           |
-| PublishComplexNotification | 16.00     | 936           |
-| Publish100Notifications    | 56.09     | 27,261        |
-| Publish1000Notifications   | 105.54    | 270,549       |
-
 Notes:
 - Notification benchmarks include enqueue + background processing overhead.
 - Allocation scales primarily with handler count and batch size.
