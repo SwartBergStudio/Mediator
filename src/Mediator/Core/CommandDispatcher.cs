@@ -15,8 +15,10 @@ internal sealed class CommandDispatcher : ICommandDispatcher
     private readonly IScopeProvider _scopeProvider;
     private readonly ILogger<CommandDispatcher> _logger;
     private readonly MediatorOptions _options;
+    private readonly bool _isDebugEnabled;
 
     private readonly ConcurrentDictionary<Type, Func<object, object, CancellationToken, Task>> _commandInvokers = new();
+    private readonly ConcurrentDictionary<Type, Type> _handlerTypeCache = new();
 
     private static readonly MethodInfo s_invokeCommandHandlerMethod = typeof(CommandDispatcher).GetMethod(nameof(InvokeCommandHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
 
@@ -25,30 +27,30 @@ internal sealed class CommandDispatcher : ICommandDispatcher
         _scopeProvider = scopeProvider;
         _logger = logger;
         _options = options.Value;
+        _isDebugEnabled = _logger.IsEnabled(LogLevel.Debug);
     }
 
     public async Task Send<TRequest>(TRequest request, CancellationToken cancellationToken = default)
         where TRequest : IRequest
     {
         var requestType = typeof(TRequest);
-        _logger.LogDebug("Processing command {CommandType}", requestType.Name);
-        
+        if (_isDebugEnabled) _logger.LogDebug("Processing command {CommandType}", requestType.Name);
+
         try
         {
             using var scope = _scopeProvider.CreateScope();
             var scopedProvider = scope.ServiceProvider;
             var invoker = GetOrCreateCommandInvoker(requestType);
             var handler = GetScopedHandler(requestType, scopedProvider);
-            
-            _logger.LogDebug("Invoking handler for command {CommandType}", requestType.Name);
+
             var task = invoker(handler, request!, cancellationToken);
             if (task.IsCompletedSuccessfully)
             {
-                _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
+                if (_isDebugEnabled) _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
                 return;
             }
             await InternalHelpers.AwaitConfigurable(task, _options.UseConfigureAwaitGlobally);
-            _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
         }
         catch (Exception ex)
         {
@@ -60,7 +62,7 @@ internal sealed class CommandDispatcher : ICommandDispatcher
     public async Task Send(IRequest request, CancellationToken cancellationToken = default)
     {
         var requestType = request.GetType();
-        _logger.LogDebug("Processing command {CommandType}", requestType.Name);
+        if (_isDebugEnabled) _logger.LogDebug("Processing command {CommandType}", requestType.Name);
 
         try
         {
@@ -69,15 +71,14 @@ internal sealed class CommandDispatcher : ICommandDispatcher
             var invoker = GetOrCreateCommandInvoker(requestType);
             var handler = GetScopedHandler(requestType, scopedProvider);
 
-            _logger.LogDebug("Invoking handler for command {CommandType}", requestType.Name);
             var task = invoker(handler, request, cancellationToken);
             if (task.IsCompletedSuccessfully)
             {
-                _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
+                if (_isDebugEnabled) _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
                 return;
             }
             await InternalHelpers.AwaitConfigurable(task, _options.UseConfigureAwaitGlobally);
-            _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
         }
         catch (Exception ex)
         {
@@ -106,14 +107,15 @@ internal sealed class CommandDispatcher : ICommandDispatcher
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private object GetScopedHandler(Type requestType, IServiceProvider scopedProvider)
     {
-        var handlerType = typeof(IRequestHandler<>).MakeGenericType(requestType);
+        var handlerType = _handlerTypeCache.GetOrAdd(requestType,
+            t => typeof(IRequestHandler<>).MakeGenericType(t));
         var handler = scopedProvider.GetService(handlerType);
         if (handler == null)
         {
             _logger.LogError("Handler not found for command type {CommandType}", requestType.Name);
             throw new InvalidOperationException($"Handler not found: {handlerType.Name}");
         }
-        _logger.LogDebug("Resolved handler for command {CommandType}", requestType.Name);
+        if (_isDebugEnabled) _logger.LogDebug("Resolved handler for command {CommandType}", requestType.Name);
         return handler;
     }
 }

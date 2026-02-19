@@ -15,11 +15,13 @@ internal sealed class RequestDispatcher : IRequestDispatcher
     private readonly IScopeProvider _scopeProvider;
     private readonly ILogger<RequestDispatcher> _logger;
     private readonly MediatorOptions _options;
+    private readonly bool _isDebugEnabled;
 
     private readonly ConcurrentDictionary<(Type request, Type response), Func<object, object, CancellationToken, Task<object>>> _requestInvokers = new();
     private readonly ConcurrentDictionary<(Type request, Type response), Type> _handlerTypeCache = new();
     private readonly ConcurrentDictionary<(Type request, Type response), Type> _behaviorTypeCache = new();
     private readonly ConcurrentDictionary<Type, Func<object, object, Func<Task<object>>, CancellationToken, Task<object>>> _behaviorInvokers = new();
+    private readonly ConcurrentDictionary<(Type request, Type response), bool> _hasBehaviors = new();
 
     private static readonly MethodInfo s_invokeBehaviorMethod = typeof(RequestDispatcher).GetMethod(nameof(InvokeBehavior), BindingFlags.NonPublic | BindingFlags.Static)!;
     private static readonly MethodInfo s_invokeRequestHandlerMethod = typeof(RequestDispatcher).GetMethod(nameof(InvokeRequestHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -29,40 +31,51 @@ internal sealed class RequestDispatcher : IRequestDispatcher
         _scopeProvider = scopeProvider;
         _logger = logger;
         _options = options.Value;
+        _isDebugEnabled = _logger.IsEnabled(LogLevel.Debug);
     }
 
     public async Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
         var requestType = request.GetType();
-        _logger.LogDebug("Processing request {RequestType}", requestType.Name);
+        if (_isDebugEnabled) _logger.LogDebug("Processing request {RequestType}", requestType.Name);
 
         try
         {
             using var scope = _scopeProvider.CreateScope();
             var scopedProvider = scope.ServiceProvider;
-            var behaviors = GetScopedBehaviors(requestType, typeof(TResponse), scopedProvider);
-            _logger.LogDebug("Discovered {BehaviorCount} behaviors for {RequestType}", behaviors.Length, requestType.Name);
+            var key = (requestType, typeof(TResponse));
 
-            if (behaviors.Length > 0)
+            var hasBehaviors = _hasBehaviors.GetOrAdd(key, k =>
             {
-                _logger.LogDebug("Executing request {RequestType} with {BehaviorCount} pipeline behaviors", requestType.Name, behaviors.Length);
+                var behaviorType = GetOrCreateBehaviorType(k.request, k.response);
+                var services = scopedProvider.GetServices(behaviorType);
+                foreach (var s in services)
+                {
+                    if (s != null) return true;
+                }
+                return false;
+            });
+
+            if (hasBehaviors)
+            {
+                var behaviors = GetScopedBehaviors(requestType, typeof(TResponse), scopedProvider);
+                if (_isDebugEnabled) _logger.LogDebug("Executing request {RequestType} with {BehaviorCount} pipeline behaviors", requestType.Name, behaviors.Length);
                 return await SendWithBehaviors<TResponse>(request, behaviors, requestType, cancellationToken, scopedProvider);
             }
 
             var invoker = GetOrCreateRequestInvoker(requestType, typeof(TResponse));
             var handler = GetScopedHandler(requestType, typeof(TResponse), scopedProvider);
-            _logger.LogDebug("Invoking handler for request {RequestType}", requestType.Name);
 
             var task = invoker(handler, request, cancellationToken);
             if (task.IsCompletedSuccessfully)
             {
                 var result = (TResponse)task.GetAwaiter().GetResult();
-                _logger.LogDebug("Request {RequestType} completed successfully", requestType.Name);
+                if (_isDebugEnabled) _logger.LogDebug("Request {RequestType} completed successfully", requestType.Name);
                 return result;
             }
 
             var awaited = (TResponse)await InternalHelpers.AwaitConfigurable(task, _options.UseConfigureAwaitGlobally);
-            _logger.LogDebug("Request {RequestType} completed successfully", requestType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("Request {RequestType} completed successfully", requestType.Name);
             return awaited;
         }
         catch (Exception ex)
@@ -107,11 +120,19 @@ internal sealed class RequestDispatcher : IRequestDispatcher
         });
     }
 
-    private static async Task<object> InvokeRequestHandler<TRequest, TResponse>(object handlerObj, object requestObj, CancellationToken token)
+    private static Task<object> InvokeRequestHandler<TRequest, TResponse>(object handlerObj, object requestObj, CancellationToken token)
         where TRequest : IRequest<TResponse>
     {
         var handler = (IRequestHandler<TRequest, TResponse>)handlerObj;
-        var result = await handler.Handle((TRequest)requestObj, token);
+        var task = handler.Handle((TRequest)requestObj, token);
+        if (task.IsCompletedSuccessfully)
+            return Task.FromResult<object>(task.GetAwaiter().GetResult()!);
+        return AwaitedInvokeRequestHandler<TResponse>(task);
+    }
+
+    private static async Task<object> AwaitedInvokeRequestHandler<TResponse>(Task<TResponse> task)
+    {
+        var result = await task.ConfigureAwait(false);
         return result!;
     }
 
@@ -128,18 +149,26 @@ internal sealed class RequestDispatcher : IRequestDispatcher
         });
     }
 
-    private static async Task<object> InvokeBehavior<TRequest, TResponse>(object behaviorObj, object requestObj, Func<Task<object>> next, CancellationToken token)
+    private static Task<object> InvokeBehavior<TRequest, TResponse>(object behaviorObj, object requestObj, Func<Task<object>> next, CancellationToken token)
         where TRequest : IRequest<TResponse>
     {
         var behavior = (IPipelineBehavior<TRequest, TResponse>)behaviorObj;
 
         async Task<TResponse> NextTyped()
         {
-            var obj = await next();
+            var obj = await next().ConfigureAwait(false);
             return (TResponse)obj;
         }
 
-        var result = await behavior.Handle((TRequest)requestObj, NextTyped, token);
+        var task = behavior.Handle((TRequest)requestObj, NextTyped, token);
+        if (task.IsCompletedSuccessfully)
+            return Task.FromResult<object>(task.GetAwaiter().GetResult()!);
+        return AwaitedInvokeBehavior<TResponse>(task);
+    }
+
+    private static async Task<object> AwaitedInvokeBehavior<TResponse>(Task<TResponse> task)
+    {
+        var result = await task.ConfigureAwait(false);
         return result!;
     }
 
@@ -175,7 +204,7 @@ internal sealed class RequestDispatcher : IRequestDispatcher
             _logger.LogError("Handler not found for request type {RequestType} returning {ResponseType}", requestType.Name, responseType.Name);
             throw new InvalidOperationException($"Handler not found: {handlerType.Name}");
         }
-        _logger.LogDebug("Resolved handler for request {RequestType} returning {ResponseType}", requestType.Name, responseType.Name);
+        if (_isDebugEnabled) _logger.LogDebug("Resolved handler for request {RequestType} returning {ResponseType}", requestType.Name, responseType.Name);
         return handler;
     }
 }

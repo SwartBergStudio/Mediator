@@ -9,23 +9,35 @@ internal static class InternalHelpers
     {
         if (source is object[] oa)
         {
-            var outList = new List<object>(oa.Length);
+            int nonNull = 0;
             for (int i = 0; i < oa.Length; i++)
             {
-                if (oa[i] != null)
-                    outList.Add(oa[i]!);
+                if (oa[i] != null) nonNull++;
             }
-            return outList.ToArray();
+
+            if (nonNull == 0) return Array.Empty<object>();
+            if (nonNull == oa.Length) return oa;
+
+            var result = new object[nonNull];
+            int j = 0;
+            for (int i = 0; i < oa.Length; i++)
+            {
+                if (oa[i] != null) result[j++] = oa[i]!;
+            }
+            return result;
         }
 
         if (source is System.Collections.ICollection coll)
         {
+            if (coll.Count == 0) return Array.Empty<object>();
+
             var arr = new object[coll.Count];
             int i = 0;
             foreach (var s in source)
             {
                 if (s != null) arr[i++] = s!;
             }
+            if (i == 0) return Array.Empty<object>();
             if (i == arr.Length) return arr;
             Array.Resize(ref arr, i);
             return arr;
@@ -36,6 +48,7 @@ internal static class InternalHelpers
         {
             if (s != null) list.Add(s);
         }
+        if (list.Count == 0) return Array.Empty<object>();
         return list.ToArray();
     }
 
@@ -44,23 +57,34 @@ internal static class InternalHelpers
     {
         if (source is object[] oa)
         {
-            var outList = new List<object>(oa.Length);
+            int nonNull = 0;
             for (int i = 0; i < oa.Length; i++)
             {
-                if (oa[i] != null)
-                    outList.Add(oa[i]!.GetType());
+                if (oa[i] != null) nonNull++;
             }
-            return outList.ToArray();
+
+            if (nonNull == 0) return Array.Empty<object>();
+
+            var result = new object[nonNull];
+            int j = 0;
+            for (int i = 0; i < oa.Length; i++)
+            {
+                if (oa[i] != null) result[j++] = oa[i]!.GetType();
+            }
+            return result;
         }
 
         if (source is System.Collections.ICollection coll)
         {
+            if (coll.Count == 0) return Array.Empty<object>();
+
             var arr = new object[coll.Count];
             int i = 0;
             foreach (var s in source)
             {
                 if (s != null) arr[i++] = s.GetType();
             }
+            if (i == 0) return Array.Empty<object>();
             if (i == arr.Length) return arr;
             Array.Resize(ref arr, i);
             return arr;
@@ -71,6 +95,7 @@ internal static class InternalHelpers
         {
             if (s != null) list.Add(s.GetType());
         }
+        if (list.Count == 0) return Array.Empty<object>();
         return list.ToArray();
     }
 

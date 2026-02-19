@@ -21,6 +21,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     private readonly MediatorOptions _options;
     private readonly INotificationPersistence? _persistence;
     private readonly INotificationSerializer? _serializer;
+    private readonly bool _isDebugEnabled;
 
     private readonly Channel<NotificationWorkItem> _notificationChannel;
     private readonly ChannelWriter<NotificationWorkItem> _channelWriter;
@@ -28,6 +29,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
     private readonly ConcurrentDictionary<Type, object[]> _notificationHandlerCache = new();
     private readonly ConcurrentDictionary<Type, Func<object, object, CancellationToken, Task>> _notificationInvokers = new();
+    private readonly ConcurrentDictionary<Type, Type> _handlerTypeCache = new();
 
     private static readonly MethodInfo s_invokeNotificationHandlerMethod = typeof(NotificationPublisher).GetMethod(nameof(InvokeNotificationHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
 
@@ -50,6 +52,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         _scopeProvider = scopeProvider;
         _logger = logger;
         _options = options.Value;
+        _isDebugEnabled = _logger.IsEnabled(LogLevel.Debug);
         SanitizeOptions(_options);
 
         if (_options.EnablePersistence)
@@ -103,7 +106,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         where TNotification : INotification
     {
         var notificationType = notification?.GetType() ?? typeof(TNotification);
-        _logger.LogDebug("Publishing notification of type {NotificationType}", notificationType.Name);
+        if (_isDebugEnabled) _logger.LogDebug("Publishing notification of type {NotificationType}", notificationType.Name);
 
         string? serializedNotification = null;
         var workItem = default(NotificationWorkItem);
@@ -117,13 +120,13 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
                 if (!string.IsNullOrEmpty(serializedNotification))
                 {
-                    _logger.LogDebug("Persisting notification {NotificationType}", notificationType.Name);
+                    if (_isDebugEnabled) _logger.LogDebug("Persisting notification {NotificationType}", notificationType.Name);
                     var persistTask = _persistence.PersistAsync(workItem, cancellationToken);
                     if (!persistTask.IsCompletedSuccessfully)
                     {
                         await AwaitConfigurable(persistTask);
                     }
-                    _logger.LogDebug("Notification {NotificationType} persisted successfully", notificationType.Name);
+                    if (_isDebugEnabled) _logger.LogDebug("Notification {NotificationType} persisted successfully", notificationType.Name);
                 }
             }
             catch (Exception ex)
@@ -144,17 +147,17 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         {
             if (!_channelWriter.TryWrite(workItem))
             {
-                _logger.LogDebug("Channel full for {NotificationType}, waiting for space", notificationType.Name);
+                if (_isDebugEnabled) _logger.LogDebug("Channel full for {NotificationType}, waiting for space", notificationType.Name);
                 var writeTask = _channelWriter.WriteAsync(workItem, cancellationToken).AsTask();
                 if (!writeTask.IsCompletedSuccessfully)
                 {
                     await AwaitConfigurable(writeTask);
                 }
-                _logger.LogDebug("Notification {NotificationType} written to channel", notificationType.Name);
+                if (_isDebugEnabled) _logger.LogDebug("Notification {NotificationType} written to channel", notificationType.Name);
             }
             else
             {
-                _logger.LogDebug("Notification {NotificationType} written to channel (TryWrite succeeded)", notificationType.Name);
+                if (_isDebugEnabled) _logger.LogDebug("Notification {NotificationType} written to channel (TryWrite succeeded)", notificationType.Name);
             }
         }
         catch (Exception ex)
@@ -253,8 +256,8 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
             {
                 if (workItem.NotificationType == null || workItem.Notification == null)
                 {
-                    _logger.LogError("Received invalid notification work item, skipping. NotificationType={NotificationType}, Notification={Notification}", 
-                        workItem.NotificationType?.Name ?? "null", 
+                    _logger.LogError("Received invalid notification work item, skipping. NotificationType={NotificationType}, Notification={Notification}",
+                        workItem.NotificationType?.Name ?? "null",
                         workItem.Notification?.GetType().Name ?? "null");
                     continue;
                 }
@@ -289,30 +292,29 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         var notification = workItem.Notification!;
         var token = _cancellationTokenSource.Token;
 
-        _logger.LogDebug("Processing notification {NotificationType}", notificationType.Name);
+        if (_isDebugEnabled) _logger.LogDebug("Processing notification {NotificationType}", notificationType.Name);
 
-        // Create a scope for handler resolution to ensure proper DI context
         using var scope = _scopeProvider.CreateScope();
         var handlerInstances = GetCachedNotificationHandlers(notificationType, scope.ServiceProvider);
-        _logger.LogDebug("Discovered {HandlerCount} handlers for notification type {NotificationType}", handlerInstances.Length, notificationType.Name);
+        if (_isDebugEnabled) _logger.LogDebug("Discovered {HandlerCount} handlers for notification type {NotificationType}", handlerInstances.Length, notificationType.Name);
 
         if (handlerInstances.Length == 0)
         {
-            _logger.LogDebug("No handlers found for notification type {NotificationType}", notificationType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("No handlers found for notification type {NotificationType}", notificationType.Name);
             return;
         }
 
         var invoker = GetOrCreateNotificationInvoker(notificationType);
-        var handlerInterfaceType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
+        var handlerInterfaceType = GetOrCreateHandlerType(notificationType);
 
         if (handlerInstances.Length == 1)
         {
-            _logger.LogDebug("Invoking single handler for {NotificationType}", notificationType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("Invoking single handler for {NotificationType}", notificationType.Name);
             await InvokeHandlerInOwnScope(invoker, handlerInterfaceType, handlerInstances[0]!, notification, token).ConfigureAwait(false);
             return;
         }
 
-        _logger.LogDebug("Invoking {HandlerCount} handlers in parallel for {NotificationType}", handlerInstances.Length, notificationType.Name);
+        if (_isDebugEnabled) _logger.LogDebug("Invoking {HandlerCount} handlers in parallel for {NotificationType}", handlerInstances.Length, notificationType.Name);
         var pool = ArrayPool<Task>.Shared;
         var tasks = pool.Rent(handlerInstances.Length);
         var count = handlerInstances.Length;
@@ -338,7 +340,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
                     if (!t.IsCompletedSuccessfully) await t;
                 }
             }
-            _logger.LogDebug("All {HandlerCount} handlers completed successfully for {NotificationType}", count, notificationType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("All {HandlerCount} handlers completed successfully for {NotificationType}", count, notificationType.Name);
         }
         catch (Exception ex)
         {
@@ -353,22 +355,27 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Type GetOrCreateHandlerType(Type notificationType)
+    {
+        return _handlerTypeCache.GetOrAdd(notificationType,
+            t => typeof(INotificationHandler<>).MakeGenericType(t));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private object[] GetCachedNotificationHandlers(Type notificationType, IServiceProvider? scopedProvider = null)
     {
-        // If scoped provider is available, always resolve from it (respects DI lifetime)
         if (scopedProvider != null)
         {
-            _logger.LogDebug("Resolving handlers from scoped provider for {NotificationType}", notificationType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("Resolving handlers from scoped provider for {NotificationType}", notificationType.Name);
             return ResolveNotificationHandlers(notificationType, scopedProvider);
         }
 
-        // Only use cache if no scoped provider (this is the fallback path, not recommended)
         return _notificationHandlerCache.GetOrAdd(notificationType, _ =>
         {
-            var handlerType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
+            var handlerType = GetOrCreateHandlerType(notificationType);
             var services = _serviceProvider.GetServices(handlerType);
             var materialized = MaterializeTypes(services);
-            _logger.LogDebug("Cached {HandlerCount} handler types for {NotificationType} from root service provider", materialized.Length, notificationType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("Cached {HandlerCount} handler types for {NotificationType} from root service provider", materialized.Length, notificationType.Name);
             return materialized;
         });
     }
@@ -376,10 +383,10 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private object[] ResolveNotificationHandlers(Type notificationType, IServiceProvider provider)
     {
-        var handlerType = typeof(INotificationHandler<>).MakeGenericType(notificationType);
+        var handlerType = GetOrCreateHandlerType(notificationType);
         var services = provider.GetServices(handlerType);
         var arr = MaterializeObjects(services);
-        _logger.LogDebug("Resolved {HandlerCount} handler instances for {NotificationType} from scoped provider", arr.Length, notificationType.Name);
+        if (_isDebugEnabled) _logger.LogDebug("Resolved {HandlerCount} handler instances for {NotificationType} from scoped provider", arr.Length, notificationType.Name);
         return arr;
     }
 
@@ -388,22 +395,19 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     {
         Type concreteType;
         if (discoveredHandlerInstance is Type ct) concreteType = ct; else concreteType = discoveredHandlerInstance.GetType();
-        
-        _logger.LogDebug("Attempting to invoke handler {HandlerType} in scope", concreteType.Name);
-        
+
+        if (_isDebugEnabled) _logger.LogDebug("Attempting to invoke handler {HandlerType} in scope", concreteType.Name);
+
         try
         {
-            // If discoveredHandlerInstance is already an instance (from scoped resolution), use it directly
             object? target = null;
             if (discoveredHandlerInstance is not Type)
             {
                 target = discoveredHandlerInstance;
-                _logger.LogDebug("Handler {HandlerType} already instantiated from scoped provider", concreteType.Name);
+                if (_isDebugEnabled) _logger.LogDebug("Handler {HandlerType} already instantiated from scoped provider", concreteType.Name);
             }
             else
             {
-                // Fallback: If we only have a Type (from cache), we need to create a scope
-                // This path is hit when called from legacy code paths
                 using var scope = _scopeProvider.CreateScope();
                 var scopedHandlers = scope.ServiceProvider.GetServices(handlerInterfaceType);
                 foreach (var h in scopedHandlers)
@@ -411,7 +415,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
                     if (h != null && h.GetType() == concreteType)
                     {
                         target = h;
-                        _logger.LogDebug("Resolved handler {HandlerType} via scope fallback", concreteType.Name);
+                        if (_isDebugEnabled) _logger.LogDebug("Resolved handler {HandlerType} via scope fallback", concreteType.Name);
                         break;
                     }
                 }
@@ -423,13 +427,13 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
                 return;
             }
 
-            _logger.LogDebug("Calling Handle method on {HandlerType}", concreteType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("Calling Handle method on {HandlerType}", concreteType.Name);
             var invocationTask = invoker(target, notification, token);
             if (!invocationTask.IsCompletedSuccessfully)
             {
                 await AwaitConfigurable(invocationTask);
             }
-            _logger.LogDebug("Handler {HandlerType} completed successfully", concreteType.Name);
+            if (_isDebugEnabled) _logger.LogDebug("Handler {HandlerType} completed successfully", concreteType.Name);
         }
         catch (Exception ex)
         {
@@ -443,12 +447,12 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
         try
         {
-            _logger.LogDebug("Starting recovery of pending notifications");
+            if (_isDebugEnabled) _logger.LogDebug("Starting recovery of pending notifications");
             var pendingNotifications = await _persistence.GetPendingAsync(_options.ProcessingBatchSize, _cancellationTokenSource.Token).ConfigureAwait(false);
 
             foreach (var persistedItem in pendingNotifications)
             {
-                if (persistedItem == null) 
+                if (persistedItem == null)
                 {
                     _logger.LogWarning("Null persisted item encountered during recovery");
                     continue;
@@ -462,7 +466,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
                 try
                 {
-                    _logger.LogDebug("Processing recovered notification {NotificationId}", persistedItem.Id);
+                    if (_isDebugEnabled) _logger.LogDebug("Processing recovered notification {NotificationId}", persistedItem.Id);
                     await ProcessPersistedItemAsync(persistedItem!).ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -490,7 +494,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     {
         try
         {
-            _logger.LogDebug("Deserializing persisted notification {NotificationId}", persistedItem.Id);
+            if (_isDebugEnabled) _logger.LogDebug("Deserializing persisted notification {NotificationId}", persistedItem.Id);
             var notification = _serializer!.Deserialize(persistedItem.WorkItem.SerializedNotification, persistedItem.WorkItem.NotificationType!);
 
             if (notification == null)
@@ -507,7 +511,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
             if (_channelWriter.TryWrite(workItem))
             {
-                _logger.LogDebug("Re-queued persisted notification {NotificationId} to channel", persistedItem.Id);
+                if (_isDebugEnabled) _logger.LogDebug("Re-queued persisted notification {NotificationId} to channel", persistedItem.Id);
                 var t = _persistence!.CompleteAsync(persistedItem.Id, _cancellationTokenSource.Token);
                 if (!t.IsCompletedSuccessfully)
                 {
@@ -530,8 +534,8 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
     private async Task HandleRetryAsync(Persistence.PersistedNotificationWorkItem item)
     {
-        _logger.LogDebug("Handling retry for persisted notification {NotificationId}, attempt {AttemptCount}", item.Id, item.AttemptCount);
-        
+        if (_isDebugEnabled) _logger.LogDebug("Handling retry for persisted notification {NotificationId}, attempt {AttemptCount}", item.Id, item.AttemptCount);
+
         if (item.AttemptCount >= _options.MaxRetryAttempts)
         {
             _logger.LogWarning("Max retry attempts ({MaxRetries}) reached for notification {NotificationId}, giving up", _options.MaxRetryAttempts, item.Id);
@@ -564,7 +568,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         try
         {
             var cutoffDate = DateTime.UtcNow.Subtract(_options.CleanupRetentionPeriod);
-            _logger.LogDebug("Running cleanup of persisted notifications before {CutoffDate}", cutoffDate);
+            if (_isDebugEnabled) _logger.LogDebug("Running cleanup of persisted notifications before {CutoffDate}", cutoffDate);
             var t = _persistence!.CleanupAsync(cutoffDate, _cancellationTokenSource.Token);
             if (!t.IsCompletedSuccessfully)
             {
