@@ -27,10 +27,10 @@ public static class MediatorServiceCollectionExtensions
             services.Configure(configureOptions);
 
         services.TryAddSingleton<IScopeProvider, Core.DefaultScopeProvider>();
-        services.TryAddSingleton<IRequestDispatcher, Core.RequestDispatcher>();
-        services.TryAddSingleton<ICommandDispatcher, Core.CommandDispatcher>();
+        services.TryAddScoped<IRequestDispatcher, Core.RequestDispatcher>();
+        services.TryAddScoped<ICommandDispatcher, Core.CommandDispatcher>();
         services.TryAddSingleton<INotificationPublisher, Core.NotificationPublisher>();
-        services.TryAddSingleton<IMediator, Core.Mediator>();
+        services.TryAddScoped<IMediator, Core.Mediator>();
 
         // Only register persistence and serialization when explicitly enabled.
         // Evaluate the options delegate to determine the flag at registration time.
@@ -115,6 +115,19 @@ public static class MediatorServiceCollectionExtensions
         if (!services.Any(descriptor => descriptor.ServiceType == serviceType))
         {
             services.AddSingleton<TService, TImplementation>();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void TryAddScoped<TService, TImplementation>(this IServiceCollection services)
+        where TService : class
+        where TImplementation : class, TService
+    {
+        var serviceType = typeof(TService);
+
+        if (!services.Any(descriptor => descriptor.ServiceType == serviceType))
+        {
+            services.AddScoped<TService, TImplementation>();
         }
     }
 }

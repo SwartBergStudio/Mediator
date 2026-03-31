@@ -12,7 +12,7 @@ namespace Mediator.Core;
 /// </summary>
 internal sealed class RequestDispatcher : IRequestDispatcher
 {
-    private readonly IScopeProvider _scopeProvider;
+    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<RequestDispatcher> _logger;
     private readonly MediatorOptions _options;
     private readonly bool _isDebugEnabled;
@@ -26,9 +26,9 @@ internal sealed class RequestDispatcher : IRequestDispatcher
     private static readonly MethodInfo s_invokeBehaviorMethod = typeof(RequestDispatcher).GetMethod(nameof(InvokeBehavior), BindingFlags.NonPublic | BindingFlags.Static)!;
     private static readonly MethodInfo s_invokeRequestHandlerMethod = typeof(RequestDispatcher).GetMethod(nameof(InvokeRequestHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
 
-    public RequestDispatcher(IScopeProvider scopeProvider, ILogger<RequestDispatcher> logger, IOptions<MediatorOptions> options)
+    public RequestDispatcher(IServiceProvider serviceProvider, ILogger<RequestDispatcher> logger, IOptions<MediatorOptions> options)
     {
-        _scopeProvider = scopeProvider;
+        _serviceProvider = serviceProvider;
         _logger = logger;
         _options = options.Value;
         _isDebugEnabled = _logger.IsEnabled(LogLevel.Debug);
@@ -41,8 +41,7 @@ internal sealed class RequestDispatcher : IRequestDispatcher
 
         try
         {
-            using var scope = _scopeProvider.CreateScope();
-            var scopedProvider = scope.ServiceProvider;
+            var scopedProvider = _serviceProvider;
             var key = (requestType, typeof(TResponse));
 
             var hasBehaviors = _hasBehaviors.GetOrAdd(key, k =>
