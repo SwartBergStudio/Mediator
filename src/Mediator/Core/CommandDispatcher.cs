@@ -12,7 +12,7 @@ namespace Mediator.Core;
 /// </summary>
 internal sealed class CommandDispatcher : ICommandDispatcher
 {
-    private readonly IScopeProvider _scopeProvider;
+    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<CommandDispatcher> _logger;
     private readonly MediatorOptions _options;
     private readonly bool _isDebugEnabled;
@@ -22,9 +22,9 @@ internal sealed class CommandDispatcher : ICommandDispatcher
 
     private static readonly MethodInfo s_invokeCommandHandlerMethod = typeof(CommandDispatcher).GetMethod(nameof(InvokeCommandHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
 
-    public CommandDispatcher(IScopeProvider scopeProvider, ILogger<CommandDispatcher> logger, IOptions<MediatorOptions> options)
+    public CommandDispatcher(IServiceProvider serviceProvider, ILogger<CommandDispatcher> logger, IOptions<MediatorOptions> options)
     {
-        _scopeProvider = scopeProvider;
+        _serviceProvider = serviceProvider;
         _logger = logger;
         _options = options.Value;
         _isDebugEnabled = _logger.IsEnabled(LogLevel.Debug);
@@ -38,8 +38,7 @@ internal sealed class CommandDispatcher : ICommandDispatcher
 
         try
         {
-            using var scope = _scopeProvider.CreateScope();
-            var scopedProvider = scope.ServiceProvider;
+            var scopedProvider = _serviceProvider;
             var invoker = GetOrCreateCommandInvoker(requestType);
             var handler = GetScopedHandler(requestType, scopedProvider);
 
@@ -66,8 +65,7 @@ internal sealed class CommandDispatcher : ICommandDispatcher
 
         try
         {
-            using var scope = _scopeProvider.CreateScope();
-            var scopedProvider = scope.ServiceProvider;
+            var scopedProvider = _serviceProvider;
             var invoker = GetOrCreateCommandInvoker(requestType);
             var handler = GetScopedHandler(requestType, scopedProvider);
 
