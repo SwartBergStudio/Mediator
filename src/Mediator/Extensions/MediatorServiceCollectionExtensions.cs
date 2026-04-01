@@ -104,7 +104,8 @@ public static class MediatorServiceCollectionExtensions
         return type == typeof(IRequestHandler<,>) ||
                type == typeof(IRequestHandler<>) ||
                type == typeof(INotificationHandler<>) ||
-               type == typeof(IStreamRequestHandler<,>);
+               type == typeof(IStreamRequestHandler<,>) ||
+               type == typeof(IStreamPipelineBehavior<,>);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

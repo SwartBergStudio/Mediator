@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 
 namespace Mediator.Tests
@@ -10,6 +11,7 @@ namespace Mediator.Tests
     {
         public string Prefix { get; set; } = string.Empty;
         public int ItemCount { get; set; } = 3;
+        public bool ShouldFailValidation { get; set; }
     }
 
     public class TestStreamRequestHandler : IStreamRequestHandler<TestStreamRequest, string>
@@ -49,6 +51,52 @@ namespace Mediator.Tests
         public string Message { get; set; } = string.Empty;
     }
 
+    // --- Stream Pipeline Behaviors ---
+
+    public class TestStreamLoggingBehavior : IStreamPipelineBehavior<TestStreamRequest, string>
+    {
+        private readonly TestTracker _tracker;
+
+        public TestStreamLoggingBehavior(TestTracker tracker) => _tracker = tracker;
+
+        public async IAsyncEnumerable<string> Handle(TestStreamRequest request, StreamHandlerDelegate<string> next, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            _tracker.AddEvent("StreamLogging: Before stream");
+            _tracker.IncrementCounter("StreamLoggingBehavior");
+
+            var itemCount = 0;
+            await foreach (var item in next().WithCancellation(cancellationToken))
+            {
+                itemCount++;
+                yield return item;
+            }
+
+            _tracker.AddEvent($"StreamLogging: After stream, yielded {itemCount} items");
+        }
+    }
+
+    public class TestStreamValidationBehavior : IStreamPipelineBehavior<TestStreamRequest, string>
+    {
+        private readonly TestTracker _tracker;
+
+        public TestStreamValidationBehavior(TestTracker tracker) => _tracker = tracker;
+
+        public IAsyncEnumerable<string> Handle(TestStreamRequest request, StreamHandlerDelegate<string> next, CancellationToken cancellationToken)
+        {
+            _tracker.AddEvent("StreamValidation: Validating request");
+            _tracker.IncrementCounter("StreamValidationBehavior");
+
+            if (request.ShouldFailValidation)
+            {
+                _tracker.AddEvent("StreamValidation: Request failed validation");
+                throw new ArgumentException("Stream request failed validation");
+            }
+
+            _tracker.AddEvent("StreamValidation: Request passed validation");
+            return next();
+        }
+    }
+
     // --- Tests ---
 
     public class StreamRequestTests
@@ -64,12 +112,41 @@ namespace Mediator.Tests
                 options.NotificationWorkerCount = 1;
             });
 
-            services.AddMediator(typeof(TestStreamRequestHandler).Assembly);
+            services.AddTransient<IStreamRequestHandler<TestStreamRequest, string>, TestStreamRequestHandler>();
+            services.AddTransient<IStreamRequestHandler<TestDelayedStreamRequest, int>, TestDelayedStreamRequestHandler>();
+
+            services.AddMediator();
 
             var serviceProvider = services.BuildServiceProvider();
             var mediator = serviceProvider.GetRequiredService<IMediator>();
 
             return (mediator, serviceProvider);
+        }
+
+        private static (IMediator mediator, ServiceProvider serviceProvider, TestTracker tracker) CreateMediatorWithStreamBehaviors()
+        {
+            var services = new ServiceCollection();
+            var tracker = new TestTracker();
+
+            services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Critical));
+            services.AddSingleton(tracker);
+
+            services.AddTransient<IStreamRequestHandler<TestStreamRequest, string>, TestStreamRequestHandler>();
+            services.AddTransient<IStreamPipelineBehavior<TestStreamRequest, string>, TestStreamLoggingBehavior>();
+            services.AddTransient<IStreamPipelineBehavior<TestStreamRequest, string>, TestStreamValidationBehavior>();
+
+            services.Configure<MediatorOptions>(options =>
+            {
+                options.EnablePersistence = false;
+                options.NotificationWorkerCount = 1;
+            });
+
+            services.AddMediator();
+
+            var serviceProvider = services.BuildServiceProvider();
+            var mediator = serviceProvider.GetRequiredService<IMediator>();
+
+            return (mediator, serviceProvider, tracker);
         }
 
         [Fact]
@@ -224,6 +301,101 @@ namespace Mediator.Tests
                 }
 
                 results.Should().BeEquivalentTo([0, 1, 2, 3]);
+            }
+        }
+
+        // --- Pipeline Behavior Tests ---
+
+        [Fact]
+        public async Task CreateStream_WithBehaviors_ShouldExecuteInOrder()
+        {
+            var (mediator, sp, tracker) = CreateMediatorWithStreamBehaviors();
+
+            using (sp)
+            {
+                var request = new TestStreamRequest { Prefix = "pipe", ItemCount = 3 };
+                var results = new List<string>();
+
+                await foreach (var item in mediator.CreateStream(request))
+                {
+                    results.Add(item);
+                }
+
+                results.Should().HaveCount(3);
+                results.Should().BeEquivalentTo(["pipe-0", "pipe-1", "pipe-2"]);
+
+                tracker.GetCounter("StreamLoggingBehavior").Should().Be(1);
+                tracker.GetCounter("StreamValidationBehavior").Should().Be(1);
+
+                var events = tracker.GetEvents();
+                events.Should().Contain("StreamValidation: Validating request");
+                events.Should().Contain("StreamValidation: Request passed validation");
+                events.Should().Contain("StreamLogging: Before stream");
+                events.Should().Contain("StreamLogging: After stream, yielded 3 items");
+            }
+        }
+
+        [Fact]
+        public async Task CreateStream_WithValidationFailure_ShouldThrowException()
+        {
+            var (mediator, sp, tracker) = CreateMediatorWithStreamBehaviors();
+
+            using (sp)
+            {
+                var request = new TestStreamRequest { Prefix = "fail", ItemCount = 3, ShouldFailValidation = true };
+
+                var exception = await Assert.ThrowsAsync<ArgumentException>(async () =>
+                {
+                    await foreach (var _ in mediator.CreateStream(request))
+                    {
+                        // Should never reach here
+                    }
+                });
+
+                exception.Message.Should().Be("Stream request failed validation");
+                tracker.GetEvents().Should().Contain("StreamValidation: Request failed validation");
+            }
+        }
+
+        [Fact]
+        public async Task CreateStream_WithBehaviors_LoggingBehaviorCountsItems()
+        {
+            var (mediator, sp, tracker) = CreateMediatorWithStreamBehaviors();
+
+            using (sp)
+            {
+                var request = new TestStreamRequest { Prefix = "count", ItemCount = 5 };
+                var results = new List<string>();
+
+                await foreach (var item in mediator.CreateStream(request))
+                {
+                    results.Add(item);
+                }
+
+                results.Should().HaveCount(5);
+                tracker.GetEvents().Should().Contain("StreamLogging: After stream, yielded 5 items");
+            }
+        }
+
+        [Fact]
+        public async Task CreateStream_WithBehaviors_EmptyStream_ShouldStillExecuteBehaviors()
+        {
+            var (mediator, sp, tracker) = CreateMediatorWithStreamBehaviors();
+
+            using (sp)
+            {
+                var request = new TestStreamRequest { Prefix = "empty", ItemCount = 0 };
+                var results = new List<string>();
+
+                await foreach (var item in mediator.CreateStream(request))
+                {
+                    results.Add(item);
+                }
+
+                results.Should().BeEmpty();
+                tracker.GetCounter("StreamLoggingBehavior").Should().Be(1);
+                tracker.GetCounter("StreamValidationBehavior").Should().Be(1);
+                tracker.GetEvents().Should().Contain("StreamLogging: After stream, yielded 0 items");
             }
         }
     }
