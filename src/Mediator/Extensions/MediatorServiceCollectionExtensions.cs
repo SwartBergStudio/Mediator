@@ -30,6 +30,7 @@ public static class MediatorServiceCollectionExtensions
         services.TryAddScoped<IRequestDispatcher, Core.RequestDispatcher>();
         services.TryAddScoped<ICommandDispatcher, Core.CommandDispatcher>();
         services.TryAddSingleton<INotificationPublisher, Core.NotificationPublisher>();
+        services.TryAddScoped<IStreamRequestDispatcher, Core.StreamRequestDispatcher>();
         services.TryAddScoped<IMediator, Core.Mediator>();
 
         // Only register persistence and serialization when explicitly enabled.
@@ -102,7 +103,9 @@ public static class MediatorServiceCollectionExtensions
     {
         return type == typeof(IRequestHandler<,>) ||
                type == typeof(IRequestHandler<>) ||
-               type == typeof(INotificationHandler<>);
+               type == typeof(INotificationHandler<>) ||
+               type == typeof(IStreamRequestHandler<,>) ||
+               type == typeof(IStreamPipelineBehavior<,>);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

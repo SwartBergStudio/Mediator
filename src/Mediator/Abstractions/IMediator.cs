@@ -30,5 +30,14 @@ namespace Mediator
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default) where TNotification : INotification;
+
+        /// <summary>
+        /// Sends a streaming request and returns an async enumerable of response items.
+        /// </summary>
+        /// <typeparam name="TResponse">The type of each streamed response item.</typeparam>
+        /// <param name="request">The streaming request to send.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>An async enumerable of response items from the stream handler.</returns>
+        IAsyncEnumerable<TResponse> CreateStream<TResponse>(IStreamRequest<TResponse> request, CancellationToken cancellationToken = default);
     }
 }
