@@ -10,6 +10,7 @@ internal sealed class Mediator : IMediator
     private readonly IRequestDispatcher _requestDispatcher;
     private readonly ICommandDispatcher _commandDispatcher;
     private readonly INotificationPublisher _notificationPublisher;
+    private readonly IStreamRequestDispatcher _streamRequestDispatcher;
 
     /// <summary>
     /// Initializes a new instance of the CompositeMediator with specialized handlers.
@@ -17,14 +18,17 @@ internal sealed class Mediator : IMediator
     /// <param name="requestDispatcher">Handles Send&lt;TResponse&gt; operations.</param>
     /// <param name="commandDispatcher">Handles Send operations (commands).</param>
     /// <param name="notificationPublisher">Handles Publish operations.</param>
+    /// <param name="streamRequestDispatcher">Handles CreateStream operations.</param>
     public Mediator(
         IRequestDispatcher requestDispatcher,
         ICommandDispatcher commandDispatcher,
-        INotificationPublisher notificationPublisher)
+        INotificationPublisher notificationPublisher,
+        IStreamRequestDispatcher streamRequestDispatcher)
     {
         _requestDispatcher = requestDispatcher;
         _commandDispatcher = commandDispatcher;
         _notificationPublisher = notificationPublisher;
+        _streamRequestDispatcher = streamRequestDispatcher;
     }
 
     /// <summary>
@@ -52,4 +56,10 @@ internal sealed class Mediator : IMediator
     public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
         where TNotification : INotification
         => _notificationPublisher.Publish(notification, cancellationToken);
+
+    /// <summary>
+    /// Sends a streaming request and returns an async enumerable of response items.
+    /// </summary>
+    public IAsyncEnumerable<TResponse> CreateStream<TResponse>(IStreamRequest<TResponse> request, CancellationToken cancellationToken = default)
+        => _streamRequestDispatcher.CreateStream(request, cancellationToken);
 }
