@@ -178,6 +178,35 @@ public class MediatorHandlerGeneratorTests
     }
 
     [Fact]
+    public void Declared_command_behaviors_are_closed_over_requests_without_response()
+    {
+        var (output, diagnostics, generated) = Run(WithAssemblyAttribute(
+            "[assembly: Mediator.MediatorPipelineBehaviors(typeof(App.CommandLog<>), typeof(App.Outer<,>))]") + """
+
+            public sealed record Save(string Name) : IRequest;
+            public sealed class SaveHandler : IRequestHandler<Save>
+            {
+                public Task Handle(Save request, CancellationToken cancellationToken) => Task.CompletedTask;
+            }
+            public sealed class CommandLog<TRequest> : IPipelineBehavior<TRequest> where TRequest : IRequest
+            {
+                public Task Handle(TRequest request, RequestHandlerDelegate next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class Outer<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse>
+            {
+                public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+            }
+            """);
+
+        diagnostics.Should().BeEmpty();
+        output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
+
+        // Command behaviors apply to IRequest only; request behaviors apply to IRequest<T> only.
+        Registered(generated, "global::Mediator.IPipelineBehavior<global::App.Save>").Should().Equal("global::App.CommandLog<global::App.Save>");
+        Registered(generated, "global::Mediator.IPipelineBehavior<global::App.Ping, string>").Should().Equal("global::App.Outer<global::App.Ping, string>");
+    }
+
+    [Fact]
     public void Invalid_declared_behavior_reports_MEDGEN004()
     {
         var (output, diagnostics, generated) = Run(WithAssemblyAttribute(

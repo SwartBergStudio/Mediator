@@ -1,8 +1,8 @@
 namespace Mediator
 {
     /// <summary>
-    /// Declares open generic pipeline behaviors (<c>IPipelineBehavior&lt;,&gt;</c> and
-    /// <c>IStreamPipelineBehavior&lt;,&gt;</c>) that wrap every request and stream request handled in this assembly.
+    /// Declares open generic pipeline behaviors (<c>IPipelineBehavior&lt;,&gt;</c>, <c>IPipelineBehavior&lt;&gt;</c> for requests
+    /// without a response, and <c>IStreamPipelineBehavior&lt;,&gt;</c>) that wrap every matching request handled in this assembly.
     /// </summary>
     /// <remarks>
     /// <para>

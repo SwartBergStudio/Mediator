@@ -109,15 +109,14 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
                 var closed = BehaviorDeclarations.TryClose(declaration, handlerInterface.TypeArguments, context.SemanticModel.Compilation);
                 if (closed is null || !IsAccessible(closed)) continue;
 
-                var behaviorInterface = kind == HandlerKind.Request ? "IPipelineBehavior" : "IStreamPipelineBehavior";
-                var request = FullName(handlerInterface.TypeArguments[0]);
-                var response = FullName(handlerInterface.TypeArguments[1]);
+                var behaviorInterface = kind == HandlerKind.StreamRequest ? "IStreamPipelineBehavior" : "IPipelineBehavior";
+                var messageTypes = string.Join(", ", handlerInterface.TypeArguments.Select(FullName));
                 registrations.Add(new HandlerRegistration(
                     HandlerKind.DeclaredBehavior,
-                    $"global::Mediator.{behaviorInterface}<{request}, {response}>",
+                    $"global::Mediator.{behaviorInterface}<{messageTypes}>",
                     FullName(closed),
-                    request,
-                    response,
+                    FullName(handlerInterface.TypeArguments[0]),
+                    handlerInterface.TypeArguments.Length > 1 ? FullName(handlerInterface.TypeArguments[1]) : null,
                     declaration.Order));
             }
         }

@@ -29,7 +29,9 @@ internal static class HandlerRegistrations
         foreach (var descriptor in services)
         {
             if (descriptor.ImplementationType != null &&
-                (IsHandlerInterface(descriptor.ServiceType) || IsClosed(descriptor.ServiceType, typeof(IPipelineBehavior<,>))))
+                (IsHandlerInterface(descriptor.ServiceType) ||
+                 IsClosed(descriptor.ServiceType, typeof(IPipelineBehavior<,>)) ||
+                 IsClosed(descriptor.ServiceType, typeof(IPipelineBehavior<>))))
             {
                 existing.Add((descriptor.ServiceType, descriptor.ImplementationType));
             }
@@ -65,7 +67,9 @@ internal static class HandlerRegistrations
                     if (!IsHandlerInterface(interfaceType))
                         continue;
 
-                    if (IsClosed(interfaceType, typeof(IRequestHandler<,>)) || IsClosed(interfaceType, typeof(IStreamRequestHandler<,>)))
+                    if (IsClosed(interfaceType, typeof(IRequestHandler<,>)) ||
+                        IsClosed(interfaceType, typeof(IRequestHandler<>)) ||
+                        IsClosed(interfaceType, typeof(IStreamRequestHandler<,>)))
                         requestHandlers.Add(interfaceType);
 
                     if (existing.Add((interfaceType, type)))
@@ -94,8 +98,9 @@ internal static class HandlerRegistrations
         {
             foreach (var handlerInterface in requestHandlers)
             {
-                var behaviorInterface = handlerInterface.GetGenericTypeDefinition() == typeof(IRequestHandler<,>)
-                    ? typeof(IPipelineBehavior<,>)
+                var handlerDefinition = handlerInterface.GetGenericTypeDefinition();
+                var behaviorInterface = handlerDefinition == typeof(IRequestHandler<,>) ? typeof(IPipelineBehavior<,>)
+                    : handlerDefinition == typeof(IRequestHandler<>) ? typeof(IPipelineBehavior<>)
                     : typeof(IStreamPipelineBehavior<,>);
 
                 var messageTypes = handlerInterface.GetGenericArguments();
@@ -111,7 +116,7 @@ internal static class HandlerRegistrations
 
     /// <summary>
     /// Closes an open behavior such as <c>MyBehavior&lt;TRequest, TResponse&gt; : IPipelineBehavior&lt;TRequest, TResponse&gt;</c>
-    /// for the given (request, response) pair. Returns false if the type does not implement the behavior interface with
+    /// (or <c>MyBehavior&lt;TRequest&gt; : IPipelineBehavior&lt;TRequest&gt;</c>) for the given message type(s). Returns false if the type does not implement the behavior interface with
     /// its own type parameters, or if its constraints reject the pair.
     /// </summary>
     [RequiresUnreferencedCode("Closes generic behavior types via reflection.")]

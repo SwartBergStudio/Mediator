@@ -63,4 +63,42 @@ internal static class Dispatch
         ArgumentNullException.ThrowIfNull(request);
         return HandlerWrapperCache.GetStreamWrapper<TResponse>(request.GetType()).Handle(request, serviceProvider, cancellationToken);
     }
+
+    /// <summary>
+    /// Invokes the notification's handlers sequentially in the given scope. The first failure stops the sequence and
+    /// is returned through the task.
+    /// </summary>
+    public static Task PublishAndWait(INotification notification, IServiceProvider serviceProvider, bool continueOnCapturedContext, CancellationToken cancellationToken)
+    {
+        if (notification is null)
+            return Task.FromException(new ArgumentNullException(nameof(notification)));
+
+        try
+        {
+            var wrapper = HandlerWrapperCache.GetNotificationWrapper(notification.GetType());
+            if (wrapper is null)
+                return Task.CompletedTask;
+
+            var handlers = wrapper.ResolveHandlers(serviceProvider);
+            return handlers.Length switch
+            {
+                0 => Task.CompletedTask,
+                1 => wrapper.Handle(handlers[0], notification, cancellationToken),
+                _ => InvokeSequentially(wrapper, handlers, notification, continueOnCapturedContext, cancellationToken),
+            };
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+    }
+
+    private static async Task InvokeSequentially(NotificationHandlerWrapper wrapper, object[] handlers, INotification notification, bool continueOnCapturedContext, CancellationToken cancellationToken)
+    {
+        // Sequential on purpose: handlers commonly share scoped services such as a DbContext, which are not thread-safe.
+        foreach (var handler in handlers)
+        {
+            await wrapper.Handle(handler, notification, cancellationToken).ConfigureAwait(continueOnCapturedContext);
+        }
+    }
 }

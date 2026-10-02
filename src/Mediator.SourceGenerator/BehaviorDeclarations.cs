@@ -10,7 +10,7 @@ namespace Mediator.SourceGenerator;
 /// An open generic behavior listed in <c>[assembly: MediatorPipelineBehaviors(...)]</c>.
 /// </summary>
 /// <param name="Type">The open generic behavior type.</param>
-/// <param name="TargetKind">Request (IPipelineBehavior) or StreamRequest (IStreamPipelineBehavior).</param>
+/// <param name="TargetKind">Request (IPipelineBehavior&lt;,&gt;), Command (IPipelineBehavior&lt;&gt;) or StreamRequest (IStreamPipelineBehavior&lt;,&gt;).</param>
 /// <param name="Positions">For each of the behavior's type parameters, its position in the behavior interface.</param>
 /// <param name="Order">Position in the attribute: the execution order.</param>
 internal sealed record BehaviorDeclaration(INamedTypeSymbol Type, HandlerKind TargetKind, ImmutableArray<int> Positions, int Order);
@@ -77,7 +77,7 @@ internal static class BehaviorDeclarations
     {
         declaration = null!;
         var definition = type.OriginalDefinition;
-        if (definition.IsAbstract || definition.TypeParameters.Length != 2 || definition.ContainingType is { IsGenericType: true })
+        if (definition.IsAbstract || definition.TypeParameters.Length == 0 || definition.ContainingType is { IsGenericType: true })
             return false;
 
         foreach (var candidate in definition.AllInterfaces)
@@ -85,10 +85,13 @@ internal static class BehaviorDeclarations
             var kind = candidate.OriginalDefinition.MetadataName switch
             {
                 "IPipelineBehavior`2" => HandlerKind.Request,
+                "IPipelineBehavior`1" => HandlerKind.Command,
                 "IStreamPipelineBehavior`2" => HandlerKind.StreamRequest,
                 _ => (HandlerKind?)null,
             };
-            if (kind is null || candidate.OriginalDefinition.ContainingNamespace?.ToDisplayString() != "Mediator")
+            if (kind is null ||
+                candidate.OriginalDefinition.ContainingNamespace?.ToDisplayString() != "Mediator" ||
+                candidate.TypeArguments.Length != definition.TypeParameters.Length)
                 continue;
 
             var positions = definition.TypeParameters
@@ -105,7 +108,7 @@ internal static class BehaviorDeclarations
     }
 
     /// <summary>
-    /// Closes the behavior over (request, response). Returns null when its generic constraints reject the pair.
+    /// Closes the behavior over the message type(s). Returns null when its generic constraints reject them.
     /// </summary>
     public static INamedTypeSymbol? TryClose(BehaviorDeclaration declaration, ImmutableArray<ITypeSymbol> messageTypes, Compilation compilation)
     {

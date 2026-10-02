@@ -33,7 +33,7 @@ internal static class Diagnostics
     public static readonly DiagnosticDescriptor InvalidDeclaredBehavior = new(
         id: "MEDGEN004",
         title: "Invalid pipeline behavior declaration",
-        messageFormat: "'{0}' in [assembly: MediatorPipelineBehaviors] must be a non-abstract open generic type implementing IPipelineBehavior<,> or IStreamPipelineBehavior<,> with its own two type parameters",
+        messageFormat: "'{0}' in [assembly: MediatorPipelineBehaviors] must be a non-abstract open generic type implementing IPipelineBehavior<,>, IPipelineBehavior<> or IStreamPipelineBehavior<,> with its own type parameters",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
