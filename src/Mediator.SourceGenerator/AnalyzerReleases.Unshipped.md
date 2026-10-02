@@ -8,3 +8,4 @@ Rule ID | Category | Severity | Notes
 MEDGEN001 | SwartBerg.Mediator | Warning | SwartBerg.Mediator is not referenced
 MEDGEN002 | SwartBerg.Mediator | Warning | Handler is not accessible to generated code
 MEDGEN003 | SwartBerg.Mediator | Info | Open generic handler requires manual registration
+MEDGEN004 | SwartBerg.Mediator | Warning | Invalid pipeline behavior declaration

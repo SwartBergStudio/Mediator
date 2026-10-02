@@ -13,11 +13,17 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # tags are needed for the package API baseline
       
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '10.0.x'
+        # Tests run on every framework the library ships for.
+        dotnet-version: |
+          8.0.x
+          9.0.x
+          10.0.x
         
     - name: Restore dependencies
       run: dotnet restore
@@ -32,3 +38,14 @@ jobs:
       run: |
         dotnet publish samples/Mediator.AotSample --configuration Release -r linux-x64 -o ./aot-sample
         ./aot-sample/Mediator.AotSample
+
+    - name: Validate public API against the latest release
+      run: |
+        # Fails if a public API of SwartBerg.Mediator was removed or changed compared to the last published version.
+        baseline=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+        baseline=${baseline#v}
+        echo "API baseline: ${baseline:-none}"
+        if [ -n "$baseline" ]; then
+          dotnet pack src/Mediator/Mediator.csproj --configuration Release --output ./packages-ci \
+            -p:Version=999.0.0-ci -p:AssemblyVersion=999.0.0.0 -p:PackageValidationBaselineVersion=$baseline
+        fi

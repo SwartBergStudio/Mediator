@@ -2,6 +2,8 @@ using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using Mediator;
 
+[assembly: MediatorPipelineBehaviors(typeof(Mediator.AotSample.CountingBehavior<,>))]
+
 namespace Mediator.AotSample;
 
 public sealed record GetGreeting(string Name) : IRequest<string>;
@@ -85,4 +87,50 @@ public sealed class Tracker
 /// <summary>Source-generated JSON metadata for persisted notifications (required for persistence under Native AOT).</summary>
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(OrderPlaced))]
+[JsonSerializable(typeof(ReportGenerated))]
 internal sealed partial class SampleJsonContext : JsonSerializerContext;
+
+/// <summary>Open generic behavior declared with [assembly: MediatorPipelineBehaviors]; the generator closes it per request.</summary>
+public sealed class CountingBehavior<TRequest, TResponse>(Tracker tracker) : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
+    {
+        tracker.Add($"behavior:{typeof(TRequest).Name}");
+        return next();
+    }
+}
+
+/// <summary>Closed stream behavior: discovered and registered by the source generator.</summary>
+public sealed class DoubleNumbers : IStreamPipelineBehavior<CountTo, int>
+{
+    public async IAsyncEnumerable<int> Handle(CountTo request, StreamHandlerDelegate<int> next, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var item in next().WithCancellation(cancellationToken))
+        {
+            yield return item * 2;
+        }
+    }
+}
+
+public sealed record Explode : IRequest<string>;
+
+public sealed class ExplodeHandler : IRequestHandler<Explode, string>
+{
+    public Task<string> Handle(Explode request, CancellationToken cancellationToken)
+        => throw new InvalidOperationException("boom");
+}
+
+public sealed class ReportGenerated : INotification
+{
+    public string ReportId { get; set; } = string.Empty;
+}
+
+public sealed class ReportGeneratedHandler(Tracker tracker) : INotificationHandler<ReportGenerated>
+{
+    public Task Handle(ReportGenerated notification, CancellationToken cancellationToken)
+    {
+        tracker.Add($"report:{notification.ReportId}");
+        return Task.CompletedTask;
+    }
+}

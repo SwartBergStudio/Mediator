@@ -150,9 +150,15 @@ await foreach (var token in mediator.CreateStream(new ChatPrompt("hello streamin
 
 ## Pipeline Behaviors
 
-Behaviors run in registration order around the handler. Request behaviors (`IPipelineBehavior<,>`) are never discovered automatically, so register them explicitly:
+Behaviors wrap handlers for cross-cutting concerns such as validation, logging or transactions. The first one registered is the outermost.
+
+### Open generic behaviors (recommended)
+
+Declare open generic behaviors once per project that contains handlers. The behaviors are listed in execution order:
 
 ```csharp
+[assembly: MediatorPipelineBehaviors(typeof(LoggingBehavior<,>), typeof(ValidationBehavior<,>))]
+
 public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
@@ -162,11 +168,25 @@ public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TReques
         return await next();
     }
 }
-
-services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
 ```
 
-Stream behaviors (`IStreamPipelineBehavior<,>`) work the same way. Closed (non-generic) stream behaviors are discovered automatically, but open generic ones like the example above must be registered explicitly.
+Each listed behavior is registered closed (for example `ValidationBehavior<CreateUser, Guid>`) for every request handled in that project.
+- **Constraints decide where it applies.** For example, `where TRequest : ICommand` limits a behavior to commands.
+- **Both registration styles honour it.** The source generator emits these registrations at compile time, and `AddMediator(assemblies)` applies the same attribute when scanning.
+- **Stream behaviors work the same way.** Open generic `IStreamPipelineBehavior<,>` types can be listed in the same attribute.
+
+### Registering behaviors manually
+
+You can still register behaviors yourself, which is how it worked before:
+
+```csharp
+services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>)); // open generic
+services.AddTransient<IPipelineBehavior<GetUserQuery, User>, CachingBehavior>();     // closed, one request
+```
+
+> **Native AOT:** the DI container can't close an open generic service over a value type without dynamic code. Under Native AOT, `services.AddTransient(typeof(IPipelineBehavior<,>), ...)` therefore throws for requests returning `int`, `Guid`, `bool`, and so on. Use the attribute instead. Don't register the same behavior both ways, or it runs twice.
+
+Closed (non-generic) stream behaviors are discovered automatically.
 
 ## Notifications and Persistence
 
@@ -218,7 +238,7 @@ services.AddMediator(options => options.EnablePersistence = true, typeof(Program
    }
    ```
 
-3. Register open generic behaviors explicitly, as shown under [Pipeline Behaviors](#pipeline-behaviors).
+3. Declare open generic behaviors with `[assembly: MediatorPipelineBehaviors(...)]`, as shown under [Pipeline Behaviors](#pipeline-behaviors).
 
 The generated code registers every handler and pre-creates its strongly-typed dispatcher, so nothing is resolved by reflection at runtime. The generator reports:
 
@@ -226,7 +246,8 @@ The generated code registers every handler and pre-creates its strongly-typed di
 |---|---|---|
 | `MEDGEN001` | Warning | `SwartBerg.Mediator` is not referenced by the project. |
 | `MEDGEN002` | Warning | A handler (or its message type) is `private`/`protected` and can't be registered. Make it `internal` or `public`. |
-| `MEDGEN003` | Info | An open generic handler was skipped. Register it explicitly. |
+| `MEDGEN003` | Info | An open generic handler or behavior was skipped. List it in `[assembly: MediatorPipelineBehaviors(...)]` or register it explicitly. |
+| `MEDGEN004` | Warning | A type in `[assembly: MediatorPipelineBehaviors(...)]` isn't an open generic pipeline behavior. |
 
 ### Persistence under Native AOT
 
@@ -298,6 +319,20 @@ dotnet run -c Release -- --filter *Publish*
 ```bash
 dotnet test
 ```
+
+The suites, all run by CI on every push and pull request:
+
+| Suite | What it covers |
+|---|---|
+| `src/tests` | Library behavior, on .NET 8, 9 and 10 |
+| `src/tests-aot` | The **same** tests again with dynamic code disabled (Native AOT semantics) and typed dispatchers coming only from the source generator. Any message type the generator misses fails here. |
+| `src/generator-tests` | Generator output and diagnostics: constraints, ordering, accessibility and invalid declarations |
+| `samples/Mediator.AotSample` | Published with **Native AOT** (warnings as errors) and run. It covers requests, value-type responses, open generic and stream behaviors, commands, streams, exceptions, notifications and persistence recovery. |
+| Package validation | Packing fails if a public API changed incompatibly since the last release |
+
+Two tests protect the generated path:
+- generated registrations must equal reflection scanning;
+- persisted payloads and files must stay byte-identical to the earlier format.
 
 ## Releases and Versioning
 

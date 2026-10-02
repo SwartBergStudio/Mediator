@@ -28,6 +28,8 @@ public static class MediatorServiceCollectionExtensions
     /// </remarks>
     [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
         Justification = "Kept unannotated for backward compatibility. Trimmed/AOT apps should use AddMediatorCore + the source generator; this is documented on the method.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = "Kept unannotated for backward compatibility. Trimmed/AOT apps should use AddMediatorCore + the source generator; this is documented on the method.")]
     public static IServiceCollection AddMediator(this IServiceCollection services,
         Action<MediatorOptions> configureOptions, params Assembly[] assemblies)
     {

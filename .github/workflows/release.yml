@@ -35,7 +35,10 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '10.0.x'
+        dotnet-version: |
+          8.0.x
+          9.0.x
+          10.0.x
         
     - name: Determine version
       id: version
@@ -80,10 +83,15 @@ jobs:
 
     - name: Pack NuGet packages
       run: |
-        for project in src/Mediator/Mediator.csproj src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj; do
-          dotnet pack "$project" --no-build --configuration Release --output ./packages \
-            -p:Version=${{ steps.version.outputs.version }}
-        done
+        previous="${{ steps.version.outputs.previous_tag }}"
+        # The library's public API is validated against the previous release; major releases may break it.
+        dotnet pack src/Mediator/Mediator.csproj --no-build --configuration Release --output ./packages \
+          -p:Version=${{ steps.version.outputs.version }} \
+          -p:AssemblyVersion=${{ steps.version.outputs.version }}.0 \
+          -p:PackageValidationBaselineVersion=${previous#v} \
+          -p:EnablePackageValidation=${{ inputs.version_bump != 'major' && steps.version.outputs.previous_tag != '' }}
+        dotnet pack src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj --no-build --configuration Release --output ./packages \
+          -p:Version=${{ steps.version.outputs.version }}
 
     - name: NuGet login (trusted publishing)
       id: nuget-login

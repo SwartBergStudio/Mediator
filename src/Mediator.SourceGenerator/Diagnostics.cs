@@ -25,8 +25,16 @@ internal static class Diagnostics
     public static readonly DiagnosticDescriptor OpenGenericHandler = new(
         id: "MEDGEN003",
         title: "Open generic handler requires manual registration",
-        messageFormat: "Open generic handler '{0}' is not registered by AddMediatorHandlers(); register it explicitly with services.AddTransient(typeof(...), typeof(...))",
+        messageFormat: "Open generic handler '{0}' is not registered by AddMediatorHandlers(); list it in [assembly: MediatorPipelineBehaviors(...)] or register it explicitly",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidDeclaredBehavior = new(
+        id: "MEDGEN004",
+        title: "Invalid pipeline behavior declaration",
+        messageFormat: "'{0}' in [assembly: MediatorPipelineBehaviors] must be a non-abstract open generic type implementing IPipelineBehavior<,> or IStreamPipelineBehavior<,> with its own two type parameters",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 }

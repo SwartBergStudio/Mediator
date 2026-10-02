@@ -8,6 +8,10 @@
     <WarningsNotAsErrors>NU1510</WarningsNotAsErrors>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsAotCompatible>true</IsAotCompatible>
+
+    <!-- Fails pack if the public API breaks compatibility with the last published release. -->
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>3.0.0</PackageValidationBaselineVersion>
     
     <!-- Versioning: set by the Release workflow from git tags (GitVersion). Local builds use the placeholder. -->
     <Version>0.0.0-dev</Version>

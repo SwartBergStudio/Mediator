@@ -116,6 +116,79 @@ public class MediatorHandlerGeneratorTests
     }
 
     [Fact]
+    public void Declared_behaviors_are_closed_per_request_honouring_constraints_and_order()
+    {
+        var (output, diagnostics, generated) = Run(WithAssemblyAttribute(
+            "[assembly: Mediator.MediatorPipelineBehaviors(typeof(App.Outer<,>), typeof(App.CommandsOnly<,>), typeof(App.ClassResponses<,>), typeof(App.Swapped<,>), typeof(App.StreamLog<,>))]") + """
+
+            public interface ICommandMarker;
+            public sealed record CreateUser(string Name) : IRequest<System.Guid>, ICommandMarker;
+            public sealed class CreateUserHandler : IRequestHandler<CreateUser, System.Guid>
+            {
+                public Task<System.Guid> Handle(CreateUser request, CancellationToken cancellationToken) => Task.FromResult(System.Guid.Empty);
+            }
+            public sealed record Count : IStreamRequest<int>;
+            public sealed class CountHandler : IStreamRequestHandler<Count, int>
+            {
+                public async IAsyncEnumerable<int> Handle(Count request, CancellationToken cancellationToken) { yield return 1; await Task.Yield(); }
+            }
+
+            public sealed class Outer<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse>
+            {
+                public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class CommandsOnly<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse>, ICommandMarker
+            {
+                public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class ClassResponses<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse> where TResponse : class
+            {
+                public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class Swapped<TResponse, TRequest> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse>
+            {
+                public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class StreamLog<TRequest, TResponse> : IStreamPipelineBehavior<TRequest, TResponse> where TRequest : IStreamRequest<TResponse>
+            {
+                public IAsyncEnumerable<TResponse> Handle(TRequest request, StreamHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+            }
+            """);
+
+        diagnostics.Should().BeEmpty();
+        output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
+
+        const string Ping = "global::Mediator.IPipelineBehavior<global::App.Ping, string>";
+        const string Create = "global::Mediator.IPipelineBehavior<global::App.CreateUser, global::System.Guid>";
+
+        // Value-type response (Guid): closed at compile time, so no open-generic closing is needed at runtime.
+        Registered(generated, Create).Should().Equal(
+            "global::App.Outer<global::App.CreateUser, global::System.Guid>",
+            "global::App.CommandsOnly<global::App.CreateUser, global::System.Guid>",
+            "global::App.Swapped<global::System.Guid, global::App.CreateUser>");
+
+        // Ping is not an ICommandMarker, and string satisfies "class".
+        Registered(generated, Ping).Should().Equal(
+            "global::App.Outer<global::App.Ping, string>",
+            "global::App.ClassResponses<global::App.Ping, string>",
+            "global::App.Swapped<string, global::App.Ping>");
+
+        Registered(generated, "global::Mediator.IStreamPipelineBehavior<global::App.Count, int>")
+            .Should().Equal("global::App.StreamLog<global::App.Count, int>");
+    }
+
+    [Fact]
+    public void Invalid_declared_behavior_reports_MEDGEN004()
+    {
+        var (output, diagnostics, generated) = Run(WithAssemblyAttribute(
+            "[assembly: Mediator.MediatorPipelineBehaviors(typeof(App.PingHandler), typeof(System.Collections.Generic.List<>))]"));
+
+        output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
+        diagnostics.Where(d => d.Id == "MEDGEN004").Should().HaveCount(2);
+        generated.Should().NotContain("IPipelineBehavior");
+    }
+
+    [Fact]
     public void Missing_mediator_reference_reports_MEDGEN001()
     {
         var compilation = CSharpCompilation.Create("NoMediator",
@@ -156,6 +229,21 @@ public class MediatorHandlerGeneratorTests
             .Where(p => Path.GetFileName(p).StartsWith("System.", StringComparison.Ordinal) || Path.GetFileName(p) is "netstandard.dll" or "mscorlib.dll")
             .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
             .ToImmutableArray();
+
+    /// <summary>The shared messages with an assembly attribute placed after the using directives.</summary>
+    private static string WithAssemblyAttribute(string attribute)
+        => Messages.Replace("namespace App;", attribute + "\n\nnamespace App;");
+
+    /// <summary>Implementation types registered for a service type, in registration order.</summary>
+    private static List<string> Registered(string generated, string serviceType)
+    {
+        var prefix = $"Transient(typeof({serviceType}), typeof(";
+        return generated.Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Contains(prefix, StringComparison.Ordinal))
+            .Select(line => line.Substring(line.IndexOf(prefix, StringComparison.Ordinal) + prefix.Length).TrimEnd(')', ',', ' ').TrimEnd(')'))
+            .ToList();
+    }
 
     private static int CountOccurrences(string text, string value)
     {

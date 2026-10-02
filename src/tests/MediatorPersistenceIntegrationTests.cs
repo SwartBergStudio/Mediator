@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Moq;
 
 namespace Mediator.Tests
 {
@@ -66,15 +65,13 @@ namespace Mediator.Tests
         public async Task Publish_WithPersistenceFailure_ShouldFallbackToMemoryProcessing()
         {
             // Arrange
-            var mockPersistence = new Mock<INotificationPersistence>();
-            mockPersistence.Setup(x => x.PersistAsync(It.IsAny<NotificationWorkItem>(), It.IsAny<CancellationToken>()))
-                          .ThrowsAsync(new IOException("Disk full"));
+            var failingPersistence = new ThrowingNotificationPersistence(new IOException("Disk full"));
 
             var services = new ServiceCollection();
             services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Critical));
             
             var tracker = new TestNotificationTracker();
-            services.AddSingleton<INotificationPersistence>(mockPersistence.Object);
+            services.AddSingleton<INotificationPersistence>(failingPersistence);
             services.AddSingleton<ITestNotificationTracker>(tracker);
             
             services.AddMediator(options => 
@@ -174,6 +171,21 @@ namespace Mediator.Tests
             
             base.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Persistence whose writes always fail. Hand-written instead of a mock so the test also runs with dynamic code
+    /// disabled (Mediator.Tests.Aot), where proxy-generating mocking libraries cannot work.
+    /// </summary>
+    public sealed class ThrowingNotificationPersistence(Exception exception) : INotificationPersistence
+    {
+        public Task<string> PersistAsync(NotificationWorkItem workItem, CancellationToken cancellationToken = default) => Task.FromException<string>(exception);
+        public Task<IEnumerable<PersistedNotificationWorkItem>> GetPendingAsync(int batchSize = 100, CancellationToken cancellationToken = default)
+            => Task.FromResult(Enumerable.Empty<PersistedNotificationWorkItem>());
+        public Task CompleteAsync(string id, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task FailAsync(string id, Exception exception, DateTime? retryAfter = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task CleanupAsync(DateTime olderThan, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public void Dispose() { }
     }
 
     public class ConditionalFailingHandler : INotificationHandler<TestNotification>

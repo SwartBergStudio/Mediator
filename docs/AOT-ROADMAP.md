@@ -44,6 +44,14 @@ New project `src/Mediator.SourceGenerator` (netstandard2.0, `IIncrementalGenerat
   deferred because it can break builds of consumers that have trim analysis and warnings-as-errors turned on
   (published MAUI and Blazor WebAssembly apps).
 
+## Open generic behaviors under Native AOT
+
+Microsoft.Extensions.DependencyInjection refuses to close open generic services over value types when dynamic code is
+unavailable. So `AddTransient(typeof(IPipelineBehavior<,>), ...)` throws under Native AOT for requests such as
+`IRequest<int>` or `IRequest<Guid>`. The fix is `[assembly: MediatorPipelineBehaviors(...)]`: the generator closes each
+declared behavior per request at compile time, checking its generic constraints and keeping the declared order.
+`AddMediator(assemblies)` applies the same attribute via reflection, so both modes register identical behaviors.
+
 ## Status
 
 - The library builds with `IsAotCompatible=true` and no suppressed warnings in the dispatch path.
@@ -52,6 +60,8 @@ New project `src/Mediator.SourceGenerator` (netstandard2.0, `IIncrementalGenerat
   CI and the Release workflow publish and run it.
 - The generated registrations are tested for equality with reflection scanning (`SourceGeneratedRegistrationTests`).
 - The serializer and file persistence output is pinned byte-for-byte to the earlier format (`PersistenceFormatCompatibilityTests`).
+- `src/tests-aot` runs the full test suite with dynamic code disabled, using only generated dispatchers, on .NET 8, 9 and 10.
+- Package validation fails CI and releases on public API breaks compared with the last release.
 
 ## Bugs found and fixed in Phase 1
 
