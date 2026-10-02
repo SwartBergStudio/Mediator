@@ -76,11 +76,6 @@ jobs:
     - name: Test
       run: dotnet test --no-build --configuration Release --verbosity normal
 
-    - name: Native AOT smoke test
-      run: |
-        dotnet publish samples/Mediator.AotSample --configuration Release -r linux-x64 -o ./aot-sample
-        ./aot-sample/Mediator.AotSample
-
     - name: Pack NuGet packages
       run: |
         previous="${{ steps.version.outputs.previous_tag }}"
@@ -88,10 +83,21 @@ jobs:
         dotnet pack src/Mediator/Mediator.csproj --no-build --configuration Release --output ./packages \
           -p:Version=${{ steps.version.outputs.version }} \
           -p:AssemblyVersion=${{ steps.version.outputs.version }}.0 \
+          -p:FileVersion=${{ steps.version.outputs.version }}.0 \
           -p:PackageValidationBaselineVersion=${previous#v} \
           -p:EnablePackageValidation=${{ inputs.version_bump != 'major' && steps.version.outputs.previous_tag != '' }}
         dotnet pack src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj --no-build --configuration Release --output ./packages \
           -p:Version=${{ steps.version.outputs.version }}
+
+    # Runs after packing: publishing the sample rebuilds the library, and the packages must contain the
+    # assemblies from the versioned Build step. The same version properties keep the rebuild identical anyway.
+    - name: Native AOT smoke test
+      run: >-
+        dotnet publish samples/Mediator.AotSample --configuration Release -r linux-x64 -o ./aot-sample
+        -p:Version=${{ steps.version.outputs.version }}
+        -p:AssemblyVersion=${{ steps.version.outputs.version }}.0
+        -p:FileVersion=${{ steps.version.outputs.version }}.0
+        && ./aot-sample/Mediator.AotSample
 
     - name: NuGet login (trusted publishing)
       id: nuget-login
