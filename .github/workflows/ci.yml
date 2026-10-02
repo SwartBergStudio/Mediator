@@ -27,3 +27,8 @@ jobs:
       
     - name: Test
       run: dotnet test --no-build --configuration Release --verbosity normal
+
+    - name: Native AOT smoke test
+      run: |
+        dotnet publish samples/Mediator.AotSample --configuration Release -r linux-x64 -o ./aot-sample
+        ./aot-sample/Mediator.AotSample

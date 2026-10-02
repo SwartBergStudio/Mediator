@@ -58,38 +58,33 @@ jobs:
         echo "version=$version" >> "$GITHUB_OUTPUT"
         echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
 
-    # The version lives in git tags (vX.Y.Z, created by the GitHub Release step below) and is
-    # stamped into the project only for this build; nothing is committed back to main.
-    - name: Update project version
-      run: |
-        # Update the main project file
-        sed -i "s/<Version>.*<\/Version>/<Version>${{ steps.version.outputs.version }}<\/Version>/" src/Mediator/Mediator.csproj
-        sed -i "s/<AssemblyVersion>.*<\/AssemblyVersion>/<AssemblyVersion>${{ steps.version.outputs.version }}.0<\/AssemblyVersion>/" src/Mediator/Mediator.csproj
-        sed -i "s/<FileVersion>.*<\/FileVersion>/<FileVersion>${{ steps.version.outputs.version }}.0<\/FileVersion>/" src/Mediator/Mediator.csproj
-        
+    # The version lives in git tags (vX.Y.Z, created by the GitHub Release step below) and is passed to
+    # the build as MSBuild properties; nothing is committed back to main.
     - name: Restore dependencies
       run: dotnet restore
-      
+
     - name: Build
-      run: dotnet build --no-restore --configuration Release
-      
+      run: >-
+        dotnet build --no-restore --configuration Release
+        -p:Version=${{ steps.version.outputs.version }}
+        -p:AssemblyVersion=${{ steps.version.outputs.version }}.0
+        -p:FileVersion=${{ steps.version.outputs.version }}.0
+
     - name: Test
       run: dotnet test --no-build --configuration Release --verbosity normal
 
-    - name: Ensure README exists next to project for NuGet pack
+    - name: Native AOT smoke test
       run: |
-        if [ -f README.md ]; then
-          echo "Copying repository README.md to src/Mediator/README.md for NuGet package"
-          
-          printf "Package-Version: ${{ steps.version.outputs.version }}\n\n" > src/Mediator/README.md
-          cat README.md >> src/Mediator/README.md
-        else
-          echo "README.md not found at repo root, skipping copy"
-        fi
+        dotnet publish samples/Mediator.AotSample --configuration Release -r linux-x64 -o ./aot-sample
+        ./aot-sample/Mediator.AotSample
 
-    - name: Pack NuGet package
-      run: dotnet pack src/Mediator/Mediator.csproj --no-build --configuration Release --output ./packages
-      
+    - name: Pack NuGet packages
+      run: |
+        for project in src/Mediator/Mediator.csproj src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj; do
+          dotnet pack "$project" --no-build --configuration Release --output ./packages \
+            -p:Version=${{ steps.version.outputs.version }}
+        done
+
     - name: NuGet login (trusted publishing)
       id: nuget-login
       uses: NuGet/login@v1
@@ -107,18 +102,20 @@ jobs:
         body: |
           ## SwartBerg.Mediator v${{ steps.version.outputs.version }}
           
-          High-performance .NET 9 mediator with ultra-fast request processing, background notification handling, and crash-safe persistence.
+          High-performance mediator for .NET 8, 9 and 10 with streaming requests, background notification processing, crash-safe persistence and Native AOT support.
           
           ### Key Features
-          - Ultra-fast request processing with compiled expressions
+          - Strongly-typed dispatch with no per-call reflection
+          - Native AOT and trimming support via the source generator package
           - Background notification processing with channels
           - Optional persistence with file-based storage and retry logic
-          - Pipeline behaviors for cross-cutting concerns
-          - .NET 9 optimized with aggressive performance tuning
+          - Pipeline behaviors for requests and streams
           
           ### Installation
           ```bash
           dotnet add package SwartBerg.Mediator --version ${{ steps.version.outputs.version }}
+          # Optional, for Native AOT / trimmed apps:
+          dotnet add package SwartBerg.Mediator.SourceGenerator --version ${{ steps.version.outputs.version }}
           ```
           
           ### Documentation

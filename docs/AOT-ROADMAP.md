@@ -16,7 +16,7 @@ Both flavours share one runtime. The only difference is who creates the strongly
 - Added `MediatorRegistry.Register*` and `AddMediatorCore()`. These are the AOT-safe entry points the generator will call.
 - When dynamic code is unavailable and a wrapper wasn't registered, the mediator throws a clear error instead of failing inside reflection.
 
-## Phase 2 – source generator (next)
+## Phase 2 – source generator (done)
 
 New project `src/Mediator.SourceGenerator` (netstandard2.0, `IIncrementalGenerator`, Roslyn 4.8 so the .NET 8 SDK works). It is shipped as a separate NuGet package, so existing users are unaffected.
 
@@ -33,15 +33,25 @@ New project `src/Mediator.SourceGenerator` (netstandard2.0, `IIncrementalGenerat
 4. Tests: a generator snapshot test, plus an equivalence test checking that the generated and reflection registrations produce the same descriptors.
 5. `samples/Mediator.AotSample` with `PublishAot=true`, published in CI with warnings as errors. It runs send, command, publish and stream.
 
-## Phase 3 – trimming/AOT annotations
+## Phase 3 – trimming/AOT annotations (done, except the 3.x item at the end)
 
 - Set `<IsAotCompatible>true</IsAotCompatible>` on the library for net8.0+ and fix every analyzer warning.
 - `JsonNotificationSerializer`: add a `JsonSerializerOptions` constructor that accepts a source-generated
   `JsonSerializerContext`. Serialize the type wrapper with `Utf8JsonWriter` instead of reflection.
 - `FileNotificationPersistence`: write files with `Utf8JsonWriter` instead of anonymous types, using the same on-disk format.
   Resolve notification types through the generator's registry before falling back to `Type.GetType`.
-- Major version (3.0): annotate `AddMediator(params Assembly[])` with `[RequiresUnreferencedCode]`. This is deferred
-  because it can break builds of consumers that have trim analysis and warnings-as-errors turned on.
+- Future major version: annotate `AddMediator(params Assembly[])` with `[RequiresUnreferencedCode]`. This is still
+  deferred because it can break builds of consumers that have trim analysis and warnings-as-errors turned on
+  (published MAUI and Blazor WebAssembly apps).
+
+## Status
+
+- The library builds with `IsAotCompatible=true` and no suppressed warnings in the dispatch path.
+- `samples/Mediator.AotSample` publishes with Native AOT with zero trim/AOT warnings (warnings as errors). It runs a
+  request with a behavior, a value-type response, a command, a stream, a notification with two handlers, and persistence.
+  CI and the Release workflow publish and run it.
+- The generated registrations are tested for equality with reflection scanning (`SourceGeneratedRegistrationTests`).
+- The serializer and file persistence output is pinned byte-for-byte to the earlier format (`PersistenceFormatCompatibilityTests`).
 
 ## Bugs found and fixed in Phase 1
 
