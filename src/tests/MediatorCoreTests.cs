@@ -173,8 +173,11 @@ namespace Mediator.Tests
         }
     }
 
+    // Intentionally has no handler: the test checks the failure.
+    #pragma warning disable MEDGEN005
     public class UnhandledRequest : IRequest<string>
     {
         public string Message { get; set; } = string.Empty;
     }
+    #pragma warning restore MEDGEN005
 }

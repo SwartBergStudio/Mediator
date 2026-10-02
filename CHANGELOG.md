@@ -2,13 +2,18 @@
 
 All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator. Versions follow [Semantic Versioning](https://semver.org/); release dates and packages are on the [Releases](https://github.com/SwartBergStudio/Mediator/releases) page.
 
-## 3.1.0
+## 3.1.0 (unreleased)
 
 ### Added
 - **Pipeline behaviors for requests without a response.** The new `IPipelineBehavior<TRequest>` (with `RequestHandlerDelegate`) wraps `IRequest` handlers such as commands, in registration order. Previously, behaviors only ran for `IRequest<TResponse>`, so a validation behavior silently skipped these requests.
   - Open generic versions can be listed in `[assembly: MediatorPipelineBehaviors(...)]` next to the other behaviors, and work under Native AOT.
 - **`IMediator.PublishAndWait(notification)`.** Runs a notification's handlers now, one after another, in the caller's DI scope, and completes when they have finished. The first exception reaches the caller.
   - Use it for work that must succeed or fail with the caller, such as domain events in the same `DbContext` or transaction. `Publish` keeps its background behavior.
+- **Build-time handler checks** (in the source generator package):
+  - `MEDGEN005` warns when a request declared in the project has no handler.
+  - `MEDGEN006` warns when a request has several handlers, which would make all but the last one dead code.
+
+  Both can be suppressed per type with `#pragma` or per project with `.editorconfig` / `NoWarn`.
 - **Native AOT and trimming support.** The new `SwartBerg.Mediator.SourceGenerator` package generates `AddMediatorHandlers()` per project. It registers every handler and pre-creates the typed dispatchers at compile time, so no reflection runs at runtime.
   - The library itself is now marked AOT-compatible (`IsAotCompatible`).
   - It reports diagnostics `MEDGEN001`–`MEDGEN004`, described in the README.

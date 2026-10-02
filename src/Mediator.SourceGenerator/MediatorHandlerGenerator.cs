@@ -23,8 +23,8 @@ namespace Mediator.SourceGenerator;
 [Generator(LanguageNames.CSharp)]
 public sealed class MediatorHandlerGenerator : IIncrementalGenerator
 {
-    private const string MediatorNamespace = "Mediator";
-    private const string MediatorAssembly = "Mediator";
+    internal const string MediatorNamespace = "Mediator";
+    internal const string MediatorAssembly = "Mediator";
     private const string ClassName = "MediatorHandlerRegistrations";
 
     private static readonly Dictionary<string, HandlerKind> s_handlerInterfaces = new()
@@ -227,7 +227,7 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
         _ => null, // Stream behaviors are resolved by the stream dispatcher; they need no dispatcher of their own.
     };
 
-    private static bool IsHandlerInterface(INamedTypeSymbol type)
+    internal static bool IsHandlerInterface(INamedTypeSymbol type)
     {
         var definition = type.OriginalDefinition;
         return s_handlerInterfaces.ContainsKey(definition.MetadataName)
@@ -235,7 +235,7 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
             && definition.ContainingAssembly?.Name == MediatorAssembly;
     }
 
-    private static bool IsOpenGeneric(INamedTypeSymbol type)
+    internal static bool IsOpenGeneric(INamedTypeSymbol type)
     {
         for (var current = type; current is not null; current = current.ContainingType)
         {
@@ -267,7 +267,7 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
         }
     }
 
-    private static string FullName(ITypeSymbol type) => type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+    internal static string FullName(ITypeSymbol type) => type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
     private static string GetNamespace(Compilation compilation, AnalyzerConfigOptions options)
     {
