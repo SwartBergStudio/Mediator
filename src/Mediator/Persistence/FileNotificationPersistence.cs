@@ -7,7 +7,7 @@ namespace Mediator.Persistence
     /// <summary>
     /// File-based implementation of notification persistence using JSON files.
     /// </summary>
-    public class FileNotificationPersistence : INotificationPersistence
+    public class FileNotificationPersistence : INotificationPersistence, INotificationRetryPersistence
     {
         private readonly string _directory;
         private readonly SemaphoreSlim _semaphore = new(1, 1);
@@ -26,7 +26,14 @@ namespace Mediator.Persistence
         }
 
         /// <inheritdoc />
-        public async Task<string> PersistAsync(NotificationWorkItem workItem, CancellationToken cancellationToken = default)
+        public Task<string> PersistAsync(NotificationWorkItem workItem, CancellationToken cancellationToken = default)
+            => WriteNewAsync(workItem, attemptCount: 0, retryAfter: null, exception: null, cancellationToken);
+
+        /// <inheritdoc />
+        public Task<string> PersistForRetryAsync(NotificationWorkItem workItem, int attemptCount, DateTime retryAfter, Exception? exception, CancellationToken cancellationToken = default)
+            => WriteNewAsync(workItem, attemptCount, retryAfter, exception, cancellationToken);
+
+        private async Task<string> WriteNewAsync(NotificationWorkItem workItem, int attemptCount, DateTime? retryAfter, Exception? exception, CancellationToken cancellationToken)
         {
             if (workItem.NotificationType == null)
                 throw new ArgumentException("NotificationType cannot be null", nameof(workItem));
@@ -40,22 +47,27 @@ namespace Mediator.Persistence
             var record = WriteRecord(
                 id,
                 createdAt: DateTime.UtcNow,
-                retryAfter: null,
-                attemptCount: 0,
+                retryAfter: retryAfter,
+                attemptCount: attemptCount,
                 writer =>
                 {
                     writer.WriteStartObject();
                     writer.WriteString("assemblyQualifiedName", workItem.NotificationType.AssemblyQualifiedName ?? string.Empty);
                     writer.WriteString("serializedNotification", workItem.SerializedNotification);
                     writer.WriteString("createdAt", workItem.CreatedAt);
+                    if (workItem.TargetHandlerType != null)
+                        writer.WriteString("targetHandlerType", workItem.TargetHandlerType);
                     writer.WriteEndObject();
                 },
-                lastException: null);
+                lastException: exception?.ToString());
 
             await _semaphore.WaitAsync(cancellationToken);
             try
             {
-                await WriteFileAsync(filePath, record, cancellationToken);
+                // Written to a temporary name and renamed, so a half-written file is never read as pending.
+                var tempPath = filePath + ".tmp";
+                await WriteFileAsync(tempPath, record, cancellationToken);
+                File.Move(tempPath, filePath);
             }
             finally
             {
@@ -169,7 +181,10 @@ namespace Mediator.Persistence
                 SerializedNotification = serializedNotification,
                 CreatedAt = workItemData.TryGetProperty("createdAt", out var createdProp) && createdProp.ValueKind != JsonValueKind.Undefined 
                     ? createdProp.GetDateTime() 
-                    : DateTime.UtcNow
+                    : DateTime.UtcNow,
+                TargetHandlerType = workItemData.TryGetProperty("targetHandlerType", out var handlerProp) && handlerProp.ValueKind == JsonValueKind.String
+                    ? handlerProp.GetString()
+                    : null
             };
 
             return new PersistedNotificationWorkItem

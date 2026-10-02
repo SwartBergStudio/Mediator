@@ -26,7 +26,8 @@ See [CHANGELOG.md](https://github.com/SwartBergStudio/Mediator/blob/main/CHANGEL
 - **Streaming**: `IAsyncEnumerable<T>` responses via `CreateStream`, with stream pipeline behaviors
 - **Notifications your way**: background processing with a worker pool (`Publish`), or awaited in the caller's scope (`PublishAndWait`)
 - **Pipeline behaviors**: plug-in cross-cutting concerns for requests, requests without a response, and streams
-- **Configurable persistence**: pluggable store and serializer, with retries and exponential backoff
+- **Configurable persistence**: pluggable store and serializer; only failed handlers are retried, with exponential backoff
+- **Observability**: OpenTelemetry-ready traces and metrics, with no overhead when not collected
 - **UI-safe async**: no extra awaits on the request path, and `ConfigureAwait(false)` on the mediator's own background awaits (see [Scopes, Blazor and ConfigureAwait](#scopes-blazor-and-configureawait))
 - **Lightweight**: low allocations, minimal dependencies
 
@@ -245,7 +246,7 @@ await mediator.Publish(new SendInvoiceEmail(invoice.Id), cancellationToken);    
 With `EnablePersistence = true`, each notification published with `Publish` is also written to storage before it is queued:
 
 - A notification is removed from storage once all its handlers succeed.
-- If a handler fails, the notification is retried with exponential backoff, up to `MaxRetryAttempts`, and then dropped. A retry runs all handlers for that notification again, so handlers should be idempotent.
+- If handlers fail, **only the handlers that failed** are retried, each on its own, with exponential backoff up to `MaxRetryAttempts`. A failed handler is then dropped with a warning. Handlers that succeeded never run again for that notification. A retry can still repeat a handler's own partial work (for example, if it crashed half-way), so handlers should be idempotent.
 - Notifications still in storage after a crash or restart are recovered by a periodic loop.
 
 ```csharp
@@ -266,6 +267,10 @@ services.AddSingleton<INotificationPersistence, SqlServerNotificationPersistence
 services.AddSingleton<INotificationSerializer, MyNotificationSerializer>();
 services.AddMediator(options => options.EnablePersistence = true, typeof(Program).Assembly);
 ```
+
+A custom `INotificationPersistence` should:
+- **Store `NotificationWorkItem.TargetHandlerType`** and return it along with the other fields. That's how a retry knows which single handler to run. If it isn't stored, retries still work, but run all of the notification's handlers again.
+- **Optionally implement `INotificationRetryPersistence`.** This saves a retry item together with its retry time in one step. It's recommended when several app instances share the store, so no instance sees a retry item as ready too early.
 
 ## Native AOT and Trimming
 
@@ -325,6 +330,42 @@ services.AddMediatorHandlers();
 - In a Blazor component, `await Mediator.Send(...)` resumes on the component's synchronization context, as usual, so `StateHasChanged` and UI updates work.
 - Inside handlers and library code, keep using `.ConfigureAwait(false)` on your own awaits. It avoids hopping back to the UI context and prevents sync-over-async deadlocks.
 - `UseConfigureAwaitGlobally` (default `true`) applies to the mediator's own awaits when publishing notifications and persisting them.
+
+## Observability (tracing and metrics)
+
+The mediator reports traces and metrics through the standard .NET `ActivitySource` and `Meter` APIs, both named `SwartBerg.Mediator`, so any OpenTelemetry setup picks them up:
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing.AddSource(MediatorDiagnostics.ActivitySourceName))
+    .WithMetrics(metrics => metrics.AddMeter(MediatorDiagnostics.MeterName));
+```
+
+When nothing is subscribed, the mediator skips all telemetry work, so there is no overhead.
+
+**Traces (spans)**
+
+| Span | When |
+|---|---|
+| `send {RequestType}` | Each request or command, around its behaviors and handler. Spans created inside your handler become its children. |
+| `stream {RequestType}` | A streaming request, from the first item until the stream ends. |
+| `publish {NotificationType}` | `Publish` (persist + queue) or `PublishAndWait` (all handlers). Tagged `mediator.publish.mode` = `background` / `awaited`. |
+| `handle {NotificationType}` | Each notification handler, tagged `mediator.handler.type`. Background handlers are children of the `publish` span, so a trace connects the web request to the work it caused. |
+
+Failures set the span status to `Error` and add an `exception` event and an `error.type` tag.
+
+**Metrics**
+
+| Instrument | Type | Meaning |
+|---|---|---|
+| `mediator.request.duration` | Histogram (s) | Requests, commands and streams, including behaviors |
+| `mediator.notification.published` | Counter | Notifications published, by `mediator.publish.mode` |
+| `mediator.notification.handler.duration` | Histogram (s) | Each notification handler |
+| `mediator.notification.retries` | Counter | Retries scheduled for failed handlers (persistence) |
+| `mediator.notification.dropped` | Counter | Handlers given up after `MaxRetryAttempts` |
+| `mediator.notification.queue.size` | Gauge | Background notifications waiting for a worker |
+
+All measurements carry `mediator.message.type`; failures also carry `error.type`.
 
 ## Configuration Options
 

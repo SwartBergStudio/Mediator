@@ -2,9 +2,13 @@
 
 All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator. Versions follow [Semantic Versioning](https://semver.org/); release dates and packages are on the [Releases](https://github.com/SwartBergStudio/Mediator/releases) page.
 
-## 3.1.0
+## 3.1.0 (unreleased)
 
 ### Added
+- **Tracing and metrics.** Requests, commands, streams and notification handlers report OpenTelemetry-compatible spans and metrics through the `SwartBerg.Mediator` `ActivitySource` and `Meter` (see README → Observability).
+  - Background handler spans are children of the span that published them.
+  - Nothing is recorded, and there is no overhead, unless a listener is subscribed.
+  - `MediatorDiagnostics` exposes the source and meter names.
 - **Pipeline behaviors for requests without a response.** The new `IPipelineBehavior<TRequest>` (with `RequestHandlerDelegate`) wraps `IRequest` handlers such as commands, in registration order. Previously, behaviors only ran for `IRequest<TResponse>`, so a validation behavior silently skipped these requests.
   - Open generic versions can be listed in `[assembly: MediatorPipelineBehaviors(...)]` next to the other behaviors, and work under Native AOT.
 - **`IMediator.PublishAndWait(notification)`.** Runs a notification's handlers now, one after another, in the caller's DI scope, and completes when they have finished. The first exception reaches the caller.
@@ -15,11 +19,21 @@ All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator
 - **`[assembly: MediatorPipelineBehaviors(...)]`.** Declares open generic request and stream behaviors once per project. They are registered closed per request, honouring generic constraints and the declared order.
   - This works under Native AOT, including requests with value-type responses (`IRequest<int>`, `IRequest<Guid>`). Registering with `AddTransient(typeof(IPipelineBehavior<,>), ...)` fails for those because the DI container can't close them without dynamic code.
   - `AddMediator(assemblies)` honours the same attribute.
+- **`INotificationRetryPersistence` (optional).** Lets a store save a retry item together with its retry time in one step, so it is never briefly visible as ready. `FileNotificationPersistence` implements it. Stores shared by several app instances should implement it too.
 - **`JsonNotificationSerializer(JsonSerializerOptions)`.** Accepts a source-generated `JsonSerializerContext`, so persistence works under Native AOT.
 - **`AddMediatorCore()` and `MediatorRegistry`.** These are the reflection-free registration entry points used by the generator.
 - **Package icon** for both packages.
 
+### Fixed
+- **A persisted notification could be handled twice.** Two rare timing windows let the recovery loop queue a notification that was already being handled, or had just finished:
+  - between storing a new notification and marking it as queued;
+  - when the recovery loop worked from a snapshot taken just before the item finished.
+
+  Both were present since 3.0.0. A deterministic test now covers the second one.
+- **A crash while writing a notification file could lose the notification.** File persistence now writes to a temporary file and renames it, so a half-written file is never read and deleted as corrupt.
+
 ### Changed
+- **Only failed handlers are retried.** With persistence, when some of a notification's handlers fail, each failed handler is retried on its own. Handlers that already succeeded no longer run again. The retry entry records its handler in the new `NotificationWorkItem.TargetHandlerType`; file persistence stores it in the `workItem` object, and only when it is set.
 - **Faster dispatch with fewer allocations.** Creating the mediator per DI scope and sending a request are both cheaper; see README → Benchmarks.
 - **`IMediator` and the request, command and stream dispatchers are now transient** instead of scoped. They hold no state, and handlers still resolve from the caller's scope.
 - **Requests, commands and streams are dispatched directly.** The mediator returns the handler pipeline's task without wrapping it.
@@ -27,6 +41,7 @@ All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator
 - **AOT-safe JSON without a format change.** File persistence and `JsonNotificationSerializer` write JSON with `Utf8JsonWriter`. The on-disk and payload formats are byte-for-byte unchanged, and files written by 3.0 are still read.
 
 ### Upgrade notes (behavior changes)
+- **Custom persistence should store `NotificationWorkItem.TargetHandlerType`.** Implementations that don't store it keep working: their retries re-run all of the notification's handlers, as before.
 - **Custom `IMediator` implementations still compile.** `PublishAndWait` is a default interface method; on a custom implementation that doesn't override it, it throws `NotSupportedException`.
 - **No more "Request/Command … failed" log entries.** Handler exceptions still reach your code unchanged; your host (ASP.NET Core, Blazor) logs them as before. Failures in background notification handlers are still logged by the mediator.
 - **`IMediator` no longer routes through `IRequestDispatcher` / `ICommandDispatcher` / `IStreamRequestDispatcher`.** Those services still work when injected directly. Replacing them in DI only affected `IMediator` if you deliberately decorated them to intercept every call.

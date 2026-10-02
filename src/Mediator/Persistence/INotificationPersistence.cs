@@ -67,3 +67,25 @@ namespace Mediator.Persistence
         public Exception? LastException { get; set; }
     }
 }
+namespace Mediator.Persistence
+{
+    /// <summary>
+    /// Optional extension for <see cref="INotificationPersistence"/>: stores a retry item together with its attempt
+    /// count and retry time in one step.
+    /// </summary>
+    /// <remarks>
+    /// When some handlers of a notification fail, the mediator stores one retry item per failed handler. With this
+    /// interface the item is never visible as "ready" before its retry time. Without it, the mediator falls back to
+    /// <see cref="INotificationPersistence.PersistAsync"/> followed by <see cref="INotificationPersistence.FailAsync"/>
+    /// and pauses its own recovery loop in between; other processes sharing the same store could still see the item
+    /// in that short window. Implement this in stores shared by several app instances.
+    /// </remarks>
+    public interface INotificationRetryPersistence
+    {
+        /// <summary>
+        /// Persists a work item that should first run at <paramref name="retryAfter"/>, with the given attempt count.
+        /// </summary>
+        /// <returns>The id of the stored item.</returns>
+        Task<string> PersistForRetryAsync(NotificationWorkItem workItem, int attemptCount, DateTime retryAfter, Exception? exception, CancellationToken cancellationToken = default);
+    }
+}
