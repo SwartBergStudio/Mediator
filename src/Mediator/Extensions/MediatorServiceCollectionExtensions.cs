@@ -54,8 +54,7 @@ public static class MediatorServiceCollectionExtensions
             services.Configure(configureOptions);
 
         services.TryAddSingleton<IScopeProvider, DefaultScopeProvider>();
-        services.TryAddSingleton<DispatchRuntime>();
-        // The mediator and dispatchers hold no state of their own (the shared state lives in the DispatchRuntime singleton),
+        // The mediator and dispatchers hold no state of their own (dispatchers are cached per message type),
         // so they are transient: cheap to create per scope, and handlers still resolve from the caller's scope.
         services.TryAddTransient<IRequestDispatcher, RequestDispatcher>();
         services.TryAddTransient<ICommandDispatcher, CommandDispatcher>();
