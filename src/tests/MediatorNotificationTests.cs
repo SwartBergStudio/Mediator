@@ -17,7 +17,8 @@ namespace Mediator.Tests
                 var stopwatch = System.Diagnostics.Stopwatch.StartNew();
                 var tasks = events.Select(e => mediator.Publish(e));
                 await Task.WhenAll(tasks);
-                await Task.Delay(1000);
+                await Eventually.WaitUntilAsync(() =>
+                    tracker.GetCounter("EventHandler1") == eventCount && tracker.GetCounter("EventHandler2") == eventCount);
                 stopwatch.Stop();
 
                 tracker.GetCounter("EventHandler1").Should().Be(eventCount);

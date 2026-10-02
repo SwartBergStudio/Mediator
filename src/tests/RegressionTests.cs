@@ -27,8 +27,10 @@ namespace Mediator.Tests
             var mediator = serviceProvider.GetRequiredService<IMediator>();
 
             await mediator.Publish(new TestNotification { Message = "once" });
+            await Eventually.WaitUntilAsync(() => tracker.GetHandleCount("TestNotificationHandler") > 0);
 
-            // Several recovery passes run in this window; previously each persisted notification was handled again.
+            // Several recovery passes (every 50 ms) run in this window; previously each persisted notification was
+            // handled again. This fixed wait is intentional: it gives a duplicate the chance to appear.
             await Task.Delay(600);
 
             tracker.GetHandleCount("TestNotificationHandler").Should().Be(1);

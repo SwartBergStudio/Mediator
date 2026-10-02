@@ -86,7 +86,8 @@ namespace Mediator.Tests
                 var testEvent = new TestEvent { Message = "Test Event" };
 
                 await mediator.Publish(testEvent);
-                await Task.Delay(100);
+                await Eventually.WaitUntilAsync(() =>
+                    tracker.GetCounter("EventHandler1") == 1 && tracker.GetCounter("EventHandler2") == 1 && tracker.GetCounter("FailingEventHandler") == 1);
 
                 tracker.GetCounter("EventHandler1").Should().Be(1);
                 tracker.GetCounter("EventHandler2").Should().Be(1);
@@ -109,7 +110,8 @@ namespace Mediator.Tests
                 var testEvent = new TestEvent { Message = "Event with failure" };
 
                 await mediator.Publish(testEvent);
-                await Task.Delay(200);
+                await Eventually.WaitUntilAsync(() =>
+                    tracker.GetCounter("EventHandler1") == 1 && tracker.GetCounter("EventHandler2") == 1 && tracker.GetCounter("FailingEventHandler") == 1);
 
                 tracker.GetCounter("EventHandler1").Should().Be(1);
                 tracker.GetCounter("EventHandler2").Should().Be(1);
