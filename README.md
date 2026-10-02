@@ -13,7 +13,7 @@
 
 A fast mediator for .NET 8, 9 and 10. It supports requests, commands, streaming, pipeline behaviors, background notification processing and crash-safe notification persistence, and runs under Native AOT.
 
-Inspired by MediatR, this library was created as a free alternative with similar patterns. It is optimized for performance and includes built-in persistence and background processing.
+When MediatR moved to a paid license, I built my own mediator using the same familiar interfaces, so it feels at home if you've used MediatR. It is free and adds built-in background processing, notification persistence and Native AOT support.
 
 The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of my surname and my wife's maiden name.  If you like to thank me for the library buy me a coffee.  Link is at the bottom of this readme.
 
@@ -21,7 +21,7 @@ See [CHANGELOG.md](https://github.com/SwartBergStudio/Mediator/blob/main/CHANGEL
 
 ## Features
 
-- **High performance**: strongly-typed dispatch, cached per message type, with no per-call reflection or boxing. Faster than MediatR 12 with fewer allocations ([benchmarks](#benchmarks))
+- **High performance**: strongly-typed dispatch, cached per message type, with no per-call reflection or boxing. ([benchmarks](#benchmarks))
 - **Native AOT and trimming**: optional source generator registers handlers at compile time
 - **Streaming**: `IAsyncEnumerable<T>` responses via `CreateStream`, with stream pipeline behaviors
 - **Background processing**: non-blocking notification dispatch with a worker pool
@@ -325,24 +325,21 @@ Highlights:
 
 ## Benchmarks
 
-The comparison with [MediatR](https://github.com/jbogard/MediatR) 12.4.1 (the last MIT-licensed release) uses equivalent handlers and registrations. It was run with BenchmarkDotNet on .NET 10, x64 Linux:
+Dispatch overhead measured with BenchmarkDotNet on .NET 10, x64 Linux:
 
-| Scenario | SwartBerg.Mediator | MediatR 12.4.1 |
+| Scenario | Time | Allocated |
 |---|---|---|
-| Request | **66 ns** / 64 B | 85 ns / 128 B |
-| Command | **27 ns** / 24 B | 94 ns / 128 B |
-| Request + 1 behavior | **130 ns** / 288 B | 180 ns / 368 B |
-| New DI scope + request | **156 ns** / 224 B | 184 ns / 288 B |
-| New DI scope + async handler (awaits) + 1 behavior | **2.09 µs** / 664 B | 2.20 µs / 744 B |
+| Request | 67 ns | 64 B |
+| Command | 31 ns | 24 B |
+| Request + 1 pipeline behavior | 129 ns | 288 B |
+| New DI scope + request | 160 ns | 224 B |
+| New DI scope + async handler (awaits) + 1 behavior | 2.07 µs | 664 B |
 
-The last row is closest to a real web request. In it, the handler's own work dominates, and both libraries are within a few percent. Notifications aren't compared: SwartBerg.Mediator publishes to a background channel, a different model from awaiting handlers in the caller.
-
-Numbers vary per machine; run the benchmarks yourself:
+The last row is closest to a real web request (new scope, a handler that awaits, one behavior); most of that time is the handler's own async work. Numbers vary per machine; run the benchmarks yourself:
 
 ```bash
 cd src/benchmarks
-dotnet run -c Release -- --filter *MediatRComparison*
-dotnet run -c Release -- --filter *Request*
+dotnet run -c Release -- --filter *DispatchBenchmarks*
 dotnet run -c Release -- --filter *Publish*
 ```
 

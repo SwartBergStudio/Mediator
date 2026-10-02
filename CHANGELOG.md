@@ -16,7 +16,7 @@ All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator
 - **Package icon** for both packages.
 
 ### Changed
-- **Faster dispatch.** Against MediatR 12.4.1, the library is ahead in every scenario and allocates less in all of them (see README → Benchmarks).
+- **Faster dispatch with fewer allocations.** Creating the mediator per DI scope and sending a request are both cheaper; see README → Benchmarks.
 - **`IMediator` and the request, command and stream dispatchers are now transient** instead of scoped. They hold no state, and handlers still resolve from the caller's scope.
 - **Requests, commands and streams are dispatched directly.** The mediator returns the handler pipeline's task without wrapping it.
 - **File persistence no longer starves ready notifications.** `GetPendingAsync` skips files that are waiting for a retry instead of letting them fill the batch.

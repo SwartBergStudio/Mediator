@@ -9,8 +9,6 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.15.6" />
-    <!-- Comparison baseline: 12.4.1 is the last MIT-licensed MediatR release. -->
-    <PackageReference Include="MediatR" Version="12.4.1" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" />
