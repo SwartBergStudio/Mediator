@@ -53,7 +53,7 @@ namespace Mediator.Tests
             var timeout = TimeSpan.FromSeconds(10); // Should be much faster than this
             var deadline = DateTime.UtcNow.Add(timeout);
             
-            while (tracker.ProcessedCount < 30 && DateTime.UtcNow < deadline) // 10 notifications × 3 handlers = 30
+            while (tracker.ProcessedCount < 30 && DateTime.UtcNow < deadline) // 10 notifications Ã— 3 handlers = 30
             {
                 await Task.Delay(10);
             }

@@ -401,6 +401,8 @@ The suites, all run by CI on every push and pull request:
 | `samples/Mediator.AotSample` | Published with **Native AOT** (warnings as errors) and run. It covers requests, value-type responses, open generic and stream behaviors, commands, streams, exceptions, notifications and persistence recovery. |
 | Package validation | Packing fails if a public API changed incompatibly since the last release |
 
+CI also publishes a code coverage report for every run, in the run summary and as a downloadable artifact.
+
 Two tests protect the generated path:
 - generated registrations must equal reflection scanning;
 - persisted payloads and files must stay byte-identical to the earlier format.
@@ -418,13 +420,7 @@ Before releasing, move the `Unreleased` entries in [CHANGELOG.md](https://github
 
 ## Contributing
 
-1. Fork the repository
-2. Create a descriptively named feature branch: `git checkout -b feature/amazing-feature`
-3. Add changes + tests
-4. Run the tests (and the benchmarks for performance-sensitive changes)
-5. Commit: `git commit -m 'Add amazing feature'`
-6. Push: `git push origin feature/amazing-feature`
-7. Open a PR
+Contributions are welcome. See [CONTRIBUTING.md](https://github.com/SwartBergStudio/Mediator/blob/main/CONTRIBUTING.md) for building, testing and the pull request checklist, and the [Code of Conduct](https://github.com/SwartBergStudio/Mediator/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
@@ -432,7 +428,7 @@ MIT License - see [LICENSE](LICENSE).
 
 ## Support
 
-Open issues for bugs or features. Provide clear reproduction steps.
+Open an [issue](https://github.com/SwartBergStudio/Mediator/issues) for bugs or feature requests, with clear reproduction steps. Report security vulnerabilities privately as described in [SECURITY.md](https://github.com/SwartBergStudio/Mediator/blob/main/SECURITY.md).
 
 ## Appreciation (Optional)
 
