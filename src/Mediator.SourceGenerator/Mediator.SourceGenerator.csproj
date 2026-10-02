@@ -24,6 +24,7 @@
     <RepositoryUrl>https://github.com/SwartBergStudio/Mediator.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <Copyright>Copyright © SwartBerg Studio 2025</Copyright>
 
     <!-- Analyzer package: no lib/ assets, generator ships under analyzers/. -->
@@ -48,6 +49,7 @@
     <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="build\SwartBerg.Mediator.SourceGenerator.props" Pack="true" PackagePath="build;buildTransitive" />
     <None Include="..\..\README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="..\..\assets\icon-128.png" Pack="true" PackagePath="icon.png" Visible="false" />
   </ItemGroup>
 
 </Project>

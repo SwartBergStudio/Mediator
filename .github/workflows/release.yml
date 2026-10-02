@@ -126,6 +126,9 @@ jobs:
           dotnet add package SwartBerg.Mediator.SourceGenerator --version ${{ steps.version.outputs.version }}
           ```
           
+          ### What's changed
+          See the [CHANGELOG](https://github.com/SwartBergStudio/Mediator/blob/main/CHANGELOG.md) for details and upgrade notes.
+          
           ### Documentation
           - [README](https://github.com/SwartBergStudio/Mediator#readme) - Getting started and examples
           - [Performance Benchmarks](https://github.com/SwartBergStudio/Mediator#performance-benchmarks) - Latest performance data

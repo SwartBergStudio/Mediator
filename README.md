@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/SwartBergStudio/Mediator/main/assets/icon-256.png" alt="SwartBerg.Mediator" width="160" />
+</p>
+
 # SwartBerg.Mediator
 
 [![Build Status](https://github.com/SwartBergStudio/Mediator/workflows/CI/badge.svg)](https://github.com/SwartBergStudio/Mediator/actions/workflows/ci.yml)
@@ -13,15 +17,17 @@ Inspired by MediatR, this library was created as a free alternative with similar
 
 The name "SwartBerg" means "Black Mountain" in Afrikaans, it is a combination of my surname and my wife's maiden name.  If you like to thank me for the library buy me a coffee.  Link is at the bottom of this readme.
 
+See [CHANGELOG.md](https://github.com/SwartBergStudio/Mediator/blob/main/CHANGELOG.md) for what changed in each release and upgrade notes.
+
 ## Features
 
-- **High performance**: strongly-typed dispatch, cached per message type, with no per-call reflection or boxing
+- **High performance**: strongly-typed dispatch, cached per message type, with no per-call reflection or boxing. Faster than MediatR 12 with fewer allocations ([benchmarks](#benchmarks))
 - **Native AOT and trimming**: optional source generator registers handlers at compile time
 - **Streaming**: `IAsyncEnumerable<T>` responses via `CreateStream`, with stream pipeline behaviors
 - **Background processing**: non-blocking notification dispatch with a worker pool
 - **Pipeline behaviors**: plug-in cross-cutting concerns for requests and streams
 - **Configurable persistence**: pluggable store and serializer, with retries and exponential backoff
-- **UI-safe async**: `ConfigureAwait(false)` by default (configurable)
+- **UI-safe async**: no extra awaits on the request path, and `ConfigureAwait(false)` on the mediator's own background awaits (see [Scopes, Blazor and ConfigureAwait](#scopes-blazor-and-configureawait))
 - **Lightweight**: low allocations, minimal dependencies
 
 ## Packages
@@ -190,7 +196,9 @@ Closed (non-generic) stream behaviors are discovered automatically.
 
 ## Notifications and Persistence
 
-`Publish` queues the notification on an in-memory channel and returns immediately. Background workers then invoke every handler in its own DI scope. A failing handler is logged and does not affect the other handlers.
+`Publish` queues the notification on an in-memory channel and returns immediately. Background workers then invoke every handler. A failing handler is logged and does not affect the other handlers.
+
+> Notification handlers run in the background in a **new DI scope**, not the publisher's. Scoped services such as a per-user `IUserSession` are therefore fresh instances there. Put what the handlers need, such as the user id, in the notification itself.
 
 With `EnablePersistence = true`, each notification is also written to storage before it is queued:
 
@@ -265,6 +273,17 @@ services.AddMediatorHandlers();
 
 [`samples/Mediator.AotSample`](samples/Mediator.AotSample) is a complete example. CI publishes it with Native AOT and runs it on every build.
 
+## Scopes, Blazor and ConfigureAwait
+
+**Scopes.** ASP.NET Core creates a DI scope per web request, and Blazor creates one per circuit (per user connection). Request, command and stream handlers, and their behaviors, are resolved from the scope of the code that calls the mediator. Scoped services such as `IUserSession` or a `DbContext` are therefore the caller's own. That holds whether `IMediator` is injected into a component, a controller or a service.
+
+**Exceptions.** Request, command and stream handlers run inside your `await`. The mediator doesn't wrap or log their exceptions: they reach your code, and your host's logging, unchanged. Background notification failures are logged by the mediator, because nobody awaits them.
+
+**ConfigureAwait.** The mediator adds no `await` of its own between your code and a request handler. So:
+- In a Blazor component, `await Mediator.Send(...)` resumes on the component's synchronization context, as usual, so `StateHasChanged` and UI updates work.
+- Inside handlers and library code, keep using `.ConfigureAwait(false)` on your own awaits. It avoids hopping back to the UI context and prevents sync-over-async deadlocks.
+- `UseConfigureAwaitGlobally` (default `true`) applies to the mediator's own awaits when publishing notifications and persisting them.
+
 ## Configuration Options
 
 ```csharp
@@ -280,7 +299,7 @@ services.AddMediator(options =>
     options.RetryDelayMultiplier = 2.0;
     options.CleanupRetentionPeriod = TimeSpan.FromHours(24);
     options.CleanupInterval = TimeSpan.FromHours(1);
-    // options.UseConfigureAwaitGlobally = false;           // only if you need the synchronization context
+    // options.UseConfigureAwaitGlobally = false;           // mediator's own awaits (publish/persistence) only
 }, typeof(Program).Assembly);
 ```
 
@@ -306,13 +325,26 @@ Highlights:
 
 ## Benchmarks
 
+The comparison with [MediatR](https://github.com/jbogard/MediatR) 12.4.1 (the last MIT-licensed release) uses equivalent handlers and registrations. It was run with BenchmarkDotNet on .NET 10, x64 Linux:
+
+| Scenario | SwartBerg.Mediator | MediatR 12.4.1 |
+|---|---|---|
+| Request | **66 ns** / 64 B | 85 ns / 128 B |
+| Command | **27 ns** / 24 B | 94 ns / 128 B |
+| Request + 1 behavior | **130 ns** / 288 B | 180 ns / 368 B |
+| New DI scope + request | **156 ns** / 224 B | 184 ns / 288 B |
+| New DI scope + async handler (awaits) + 1 behavior | **2.09 µs** / 664 B | 2.20 µs / 744 B |
+
+The last row is closest to a real web request. In it, the handler's own work dominates, and both libraries are within a few percent. Notifications aren't compared: SwartBerg.Mediator publishes to a background channel, a different model from awaiting handlers in the caller.
+
+Numbers vary per machine; run the benchmarks yourself:
+
 ```bash
 cd src/benchmarks
+dotnet run -c Release -- --filter *MediatRComparison*
 dotnet run -c Release -- --filter *Request*
 dotnet run -c Release -- --filter *Publish*
 ```
-
-> Numbers vary per machine; run the benchmarks on your own hardware for authoritative results.
 
 ## Testing
 
@@ -343,7 +375,7 @@ Versions come from git tags (`vX.Y.Z`). The **Release** workflow is started manu
 - It publishes both packages to NuGet using trusted publishing.
 - It creates the GitHub release and tag.
 
-The version in the project files is a `0.0.0-dev` placeholder for local builds. The NuGet package README is this file, and the version badges at the top update automatically.
+Before releasing, move the `Unreleased` entries in [CHANGELOG.md](https://github.com/SwartBergStudio/Mediator/blob/main/CHANGELOG.md) under the new version. The version in the project files is a `0.0.0-dev` placeholder for local builds. The NuGet package README is this file, and the version badges at the top update automatically.
 
 ## Contributing
 

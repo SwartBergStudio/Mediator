@@ -32,6 +32,7 @@
     <RepositoryUrl>https://github.com/SwartBergStudio/Mediator.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <PackageReleaseNotes>See https://github.com/SwartBergStudio/Mediator/releases</PackageReleaseNotes>
     <Copyright>Copyright © SwartBerg Studio 2025</Copyright>
     
@@ -66,6 +67,7 @@
       <Pack>true</Pack>
       <PackagePath>README.md</PackagePath>
     </None>
+    <None Include="..\..\assets\icon-128.png" Pack="true" PackagePath="icon.png" Visible="false" />
   </ItemGroup>
 
 </Project>
