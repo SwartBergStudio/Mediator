@@ -23,14 +23,15 @@ if %ERRORLEVEL% neq 0 goto :error
 
 REM Pack NuGet package (local)
 echo ?? Creating NuGet package...
-dotnet pack src/Mediator.csproj --no-build --configuration Release --output ./local-packages
+dotnet pack src/Mediator/Mediator.csproj --no-build --configuration Release --output ./local-packages
+dotnet pack src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj --no-build --configuration Release --output ./local-packages
 if %ERRORLEVEL% neq 0 goto :error
 
 REM Run benchmarks
 echo ? Running benchmarks...
-cd benchmarks
-dotnet run --configuration Release --framework net9.0 -- --job short --memory
-cd ..
+cd src\benchmarks
+dotnet run --configuration Release --framework net10.0 -- --job short --memory --filter "*"
+cd ..\..
 if %ERRORLEVEL% neq 0 goto :error
 
 echo ? Local build completed successfully!

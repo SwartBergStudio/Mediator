@@ -83,6 +83,8 @@ internal static class HandlerWrapperCache
         Justification = "Only reached when RuntimeFeature.IsDynamicCodeSupported is true. Native AOT apps register wrappers up-front.")]
     [UnconditionalSuppressMessage("Trimming", "IL2055:MakeGenericType",
         Justification = "Wrapper types have no member requirements on their generic arguments; their constructors are preserved via DynamicDependency.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2067:DynamicallyAccessedMembers",
+        Justification = "Wrapper constructors are preserved via DynamicDependency.")]
     [UnconditionalSuppressMessage("Trimming", "IL2072:DynamicallyAccessedMembers",
         Justification = "Wrapper constructors are preserved via DynamicDependency.")]
     [DynamicDependency(DynamicallyAccessedMemberTypes.PublicConstructors, typeof(RequestHandlerWrapper<,>))]

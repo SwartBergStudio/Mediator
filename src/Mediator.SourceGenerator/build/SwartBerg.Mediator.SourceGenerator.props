@@ -1,0 +1,6 @@
+<Project>
+  <ItemGroup>
+    <!-- Lets the generator place AddMediatorHandlers() in the project's root namespace. -->
+    <CompilerVisibleProperty Include="RootNamespace" />
+  </ItemGroup>
+</Project>

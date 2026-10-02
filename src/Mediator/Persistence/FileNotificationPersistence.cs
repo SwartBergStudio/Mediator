@@ -1,6 +1,5 @@
+using System.Buffers;
 using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 namespace Mediator.Persistence
@@ -13,13 +12,6 @@ namespace Mediator.Persistence
         private readonly string _directory;
         private readonly SemaphoreSlim _semaphore = new(1, 1);
         
-        private static readonly JsonSerializerOptions JsonOptions = new()
-        {
-            WriteIndented = false,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultBufferSize = 4096
-        };
-
         /// <summary>
         /// Initializes a new instance of the FileNotificationPersistence class.
         /// </summary>
@@ -45,26 +37,25 @@ namespace Mediator.Persistence
             var id = Guid.NewGuid().ToString("N");
             var filePath = Path.Combine(_directory, $"{id}.json");
 
-            var data = new
-            {
-                Id = id,
-                CreatedAt = DateTime.UtcNow,
-                RetryAfter = (DateTime?)null,
-                AttemptCount = 0,
-                WorkItem = new
+            var record = WriteRecord(
+                id,
+                createdAt: DateTime.UtcNow,
+                retryAfter: null,
+                attemptCount: 0,
+                writer =>
                 {
-                    AssemblyQualifiedName = workItem.NotificationType.AssemblyQualifiedName ?? string.Empty,
-                    SerializedNotification = workItem.SerializedNotification,
-                    CreatedAt = workItem.CreatedAt
+                    writer.WriteStartObject();
+                    writer.WriteString("assemblyQualifiedName", workItem.NotificationType.AssemblyQualifiedName ?? string.Empty);
+                    writer.WriteString("serializedNotification", workItem.SerializedNotification);
+                    writer.WriteString("createdAt", workItem.CreatedAt);
+                    writer.WriteEndObject();
                 },
-                LastException = (string?)null
-            };
+                lastException: null);
 
             await _semaphore.WaitAsync(cancellationToken);
             try
             {
-                await using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true);
-                await JsonSerializer.SerializeAsync(stream, data, JsonOptions, cancellationToken);
+                await WriteFileAsync(filePath, record, cancellationToken);
             }
             finally
             {
@@ -88,13 +79,16 @@ namespace Mediator.Persistence
                 if (!Directory.Exists(_directory))
                     return items;
 
-                var files = Directory.EnumerateFiles(_directory, "*.json").Take(batchSize);
-                var tasks = files.Select(f => ProcessFileAsync(f, cancellationToken)).ToArray();
-                
-                if (tasks.Length > 0)
+                // Files whose retry time has not arrived are skipped without counting towards the batch,
+                // so they cannot starve notifications that are ready.
+                foreach (var file in Directory.EnumerateFiles(_directory, "*.json"))
                 {
-                    var results = await Task.WhenAll(tasks);
-                    items.AddRange(results.Where(r => r != null)!);
+                    var item = await ProcessFileAsync(file, cancellationToken);
+                    if (item != null)
+                    {
+                        items.Add(item);
+                        if (items.Count >= batchSize) break;
+                    }
                 }
             }
             finally
@@ -105,8 +99,7 @@ namespace Mediator.Persistence
             return items;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private async Task<PersistedNotificationWorkItem?> ProcessFileAsync(string filePath, CancellationToken cancellationToken)
+        private static async Task<PersistedNotificationWorkItem?> ProcessFileAsync(string filePath, CancellationToken cancellationToken)
         {
             if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
                 return null;
@@ -114,9 +107,9 @@ namespace Mediator.Persistence
             try
             {
                 await using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
-                var data = await JsonSerializer.DeserializeAsync<JsonElement>(stream, JsonOptions, cancellationToken);
-                
-                return ParseJsonToWorkItem(data);
+                using var document = await JsonDocument.ParseAsync(stream, default, cancellationToken);
+
+                return ParseJsonToWorkItem(document.RootElement);
             }
             catch (JsonException)
             {
@@ -158,7 +151,7 @@ namespace Mediator.Persistence
             if (string.IsNullOrEmpty(typeName))
                 return null;
                 
-            var notificationType = Type.GetType(typeName);
+            var notificationType = NotificationTypeResolver.Resolve(typeName);
             if (notificationType == null) 
                 return null;
 
@@ -242,33 +235,31 @@ namespace Mediator.Persistence
         {
             try
             {
-                JsonElement data;
+                byte[] record;
                 await using (var readStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.None, 4096, true))
+                using (var document = await JsonDocument.ParseAsync(readStream, default, cancellationToken))
                 {
-                    data = await JsonSerializer.DeserializeAsync<JsonElement>(readStream, JsonOptions, cancellationToken);
+                    var data = document.RootElement;
+                    if (!data.TryGetProperty("attemptCount", out var attemptProp) ||
+                        attemptProp.ValueKind != JsonValueKind.Number)
+                        return false;
+
+                    var workItem = data.GetProperty("workItem");
+                    record = WriteRecord(
+                        data.GetProperty("id").GetString()!,
+                        createdAt: data.TryGetProperty("createdAt", out var createdProp) && createdProp.ValueKind != JsonValueKind.Undefined
+                            ? createdProp.GetDateTime()
+                            : DateTime.UtcNow,
+                        retryAfter,
+                        attemptCount: attemptProp.GetInt32() + 1,
+                        workItem.WriteTo,
+                        exception?.ToString());
                 }
 
-                if (!data.TryGetProperty("attemptCount", out var attemptProp) || 
-                    attemptProp.ValueKind != JsonValueKind.Number)
-                    return false;
-
-                var updated = new
-                {
-                    Id = data.GetProperty("id").GetString(),
-                    CreatedAt = data.TryGetProperty("createdAt", out var createdProp) && createdProp.ValueKind != JsonValueKind.Undefined 
-                        ? createdProp.GetDateTime() 
-                        : DateTime.UtcNow,
-                    RetryAfter = retryAfter,
-                    AttemptCount = attemptProp.GetInt32() + 1,
-                    WorkItem = data.GetProperty("workItem"),
-                    LastException = exception?.ToString()
-                };
-
-                await using var writeStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true);
-                await JsonSerializer.SerializeAsync(writeStream, updated, JsonOptions, cancellationToken);
+                await WriteFileAsync(filePath, record, cancellationToken);
                 return true;
             }
-            catch (JsonException)
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
             {
                 return false;
             }
@@ -312,6 +303,36 @@ namespace Mediator.Persistence
             {
                 _semaphore.Release();
             }
+        }
+
+        /// <summary>
+        /// Writes a persisted record. The layout matches the camelCase JSON produced by earlier versions,
+        /// so files written before an upgrade are still readable and vice versa.
+        /// </summary>
+        private static byte[] WriteRecord(string id, DateTime createdAt, DateTime? retryAfter, int attemptCount, Action<Utf8JsonWriter> writeWorkItem, string? lastException)
+        {
+            var buffer = new ArrayBufferWriter<byte>(1024);
+            using (var writer = new Utf8JsonWriter(buffer))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("id", id);
+                writer.WriteString("createdAt", createdAt);
+                if (retryAfter.HasValue) writer.WriteString("retryAfter", retryAfter.Value);
+                else writer.WriteNull("retryAfter");
+                writer.WriteNumber("attemptCount", attemptCount);
+                writer.WritePropertyName("workItem");
+                writeWorkItem(writer);
+                if (lastException != null) writer.WriteString("lastException", lastException);
+                else writer.WriteNull("lastException");
+                writer.WriteEndObject();
+            }
+            return buffer.WrittenSpan.ToArray();
+        }
+
+        private static async Task WriteFileAsync(string filePath, byte[] content, CancellationToken cancellationToken)
+        {
+            await using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true);
+            await stream.WriteAsync(content, cancellationToken);
         }
 
         private static void SafeDeleteFile(string filePath)

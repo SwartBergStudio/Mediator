@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using Mediator.Core.Wrappers;
+using Mediator.Serialization;
 
 namespace Mediator;
 
@@ -26,7 +27,10 @@ public static class MediatorRegistry
 
     /// <summary>Pre-registers the dispatcher for a notification type.</summary>
     public static void RegisterNotification<TNotification>() where TNotification : INotification
-        => HandlerWrapperCache.RegisterNotification<TNotification>();
+    {
+        HandlerWrapperCache.RegisterNotification<TNotification>();
+        NotificationTypeResolver.Register(typeof(TNotification));
+    }
 
     /// <summary>Pre-registers the dispatcher for a streaming request.</summary>
     public static void RegisterStreamRequest<TRequest, TResponse>() where TRequest : IStreamRequest<TResponse>

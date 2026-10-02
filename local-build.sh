@@ -23,13 +23,14 @@ dotnet test --no-build --configuration Release --verbosity normal
 
 # Pack NuGet package (local)
 echo "?? Creating NuGet package..."
-dotnet pack src/Mediator.csproj --no-build --configuration Release --output ./local-packages
+dotnet pack src/Mediator/Mediator.csproj --no-build --configuration Release --output ./local-packages
+dotnet pack src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj --no-build --configuration Release --output ./local-packages
 
 # Run benchmarks
 echo "? Running benchmarks..."
-cd benchmarks
-dotnet run --configuration Release --framework net9.0 -- --job short --memory
-cd ..
+cd src/benchmarks
+dotnet run --configuration Release --framework net10.0 -- --job short --memory --filter "*"
+cd ../..
 
 echo "? Local build completed successfully!"
 echo "?? NuGet package created in ./local-packages/"

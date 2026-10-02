@@ -28,6 +28,8 @@ public static class MediatorServiceCollectionExtensions
     /// </remarks>
     [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
         Justification = "Kept unannotated for backward compatibility. Trimmed/AOT apps should use AddMediatorCore + the source generator; this is documented on the method.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = "Kept unannotated for backward compatibility. Trimmed/AOT apps should use AddMediatorCore + the source generator; this is documented on the method.")]
     public static IServiceCollection AddMediator(this IServiceCollection services,
         Action<MediatorOptions> configureOptions, params Assembly[] assemblies)
     {
@@ -52,11 +54,13 @@ public static class MediatorServiceCollectionExtensions
             services.Configure(configureOptions);
 
         services.TryAddSingleton<IScopeProvider, DefaultScopeProvider>();
-        services.TryAddScoped<IRequestDispatcher, RequestDispatcher>();
-        services.TryAddScoped<ICommandDispatcher, CommandDispatcher>();
+        // The mediator and dispatchers hold no state of their own (dispatchers are cached per message type),
+        // so they are transient: cheap to create per scope, and handlers still resolve from the caller's scope.
+        services.TryAddTransient<IRequestDispatcher, RequestDispatcher>();
+        services.TryAddTransient<ICommandDispatcher, CommandDispatcher>();
         services.TryAddSingleton<INotificationPublisher, NotificationPublisher>();
-        services.TryAddScoped<IStreamRequestDispatcher, StreamRequestDispatcher>();
-        services.TryAddScoped<IMediator, Core.Mediator>();
+        services.TryAddTransient<IStreamRequestDispatcher, StreamRequestDispatcher>();
+        services.TryAddTransient<IMediator, Core.Mediator>();
 
         // Persistence and serialization are only registered when explicitly enabled. The options delegate is
         // evaluated here so the flag is known at registration time.

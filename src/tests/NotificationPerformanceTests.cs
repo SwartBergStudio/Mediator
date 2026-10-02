@@ -5,59 +5,40 @@ using System.Diagnostics;
 namespace Mediator.Tests
 {
     /// <summary>
-    /// Tests to verify notification performance improvements are working correctly
+    /// Time from Publish until the background handler has actually run (after a warm-up, so one-time JIT and
+    /// initialization are excluded). The thresholds are deliberately generous; the point is to catch large regressions
+    /// and to prove the handlers really ran.
     /// </summary>
     public class NotificationPerformanceTests
     {
         [Fact]
         public async Task SingleNotification_ShouldProcessQuickly()
         {
-            var services = new ServiceCollection();
-            services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Error));
-            services.AddTransient<INotificationHandler<QuickTestNotification>, QuickTestHandler>();
-            services.AddMediator(options =>
-            {
-                options.EnablePersistence = false;
-                options.NotificationWorkerCount = 1;
-                options.ChannelCapacity = 100;
-                options.UseConfigureAwaitGlobally = true;
-            });
-
-            using var serviceProvider = services.BuildServiceProvider();
+            using var serviceProvider = Build();
             var mediator = serviceProvider.GetRequiredService<IMediator>();
+            var counter = new HandledCounter();
 
-            await mediator.Publish(new QuickTestNotification { Message = "Warmup" });
-            await Task.Delay(10);
+            await mediator.Publish(new QuickTestNotification { Message = "Warmup", Counter = counter });
+            await Eventually.WaitUntilAsync(() => counter.Count == 1);
 
             var sw = Stopwatch.StartNew();
-            await mediator.Publish(new QuickTestNotification { Message = "Test" });
-            await Task.Delay(50);
+            await mediator.Publish(new QuickTestNotification { Message = "Test", Counter = counter });
+            await Eventually.WaitUntilAsync(() => counter.Count == 2);
             sw.Stop();
 
-            Console.WriteLine($"Single notification processing time: {sw.Elapsed.TotalMilliseconds:F2}ms");
-            
-            Assert.True(sw.Elapsed.TotalMilliseconds < 100, 
-                $"Single notification took too long: {sw.Elapsed.TotalMilliseconds:F2}ms");
+            counter.Count.Should().Be(2, "the handler must have run for the measured notification");
+            sw.Elapsed.TotalMilliseconds.Should().BeLessThan(500, "publish to handled should be fast once warm");
         }
 
         [Fact]
         public async Task MultipleNotifications_ShouldProcessEfficiently()
         {
-            var services = new ServiceCollection();
-            services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Error));
-            services.AddTransient<INotificationHandler<QuickTestNotification>, QuickTestHandler>();
-            services.AddMediator(options =>
-            {
-                options.EnablePersistence = false;
-                options.NotificationWorkerCount = 1;
-                options.ChannelCapacity = 100;
-            });
-
-            using var serviceProvider = services.BuildServiceProvider();
+            using var serviceProvider = Build();
             var mediator = serviceProvider.GetRequiredService<IMediator>();
+            var counter = new HandledCounter();
 
-            await mediator.Publish(new QuickTestNotification { Message = "Warmup" });
-            await Task.Delay(10);
+            await mediator.Publish(new QuickTestNotification { Message = "Warmup", Counter = counter });
+            await Eventually.WaitUntilAsync(() => counter.Count == 1);
 
             const int notificationCount = 10;
             var sw = Stopwatch.StartNew();
@@ -65,33 +46,50 @@ namespace Mediator.Tests
             var tasks = new Task[notificationCount];
             for (int i = 0; i < notificationCount; i++)
             {
-                tasks[i] = mediator.Publish(new QuickTestNotification { Message = $"Test {i}" });
+                tasks[i] = mediator.Publish(new QuickTestNotification { Message = $"Test {i}", Counter = counter });
             }
 
             await Task.WhenAll(tasks);
-            await Task.Delay(50);
+            await Eventually.WaitUntilAsync(() => counter.Count == notificationCount + 1);
             sw.Stop();
 
-            var avgTimePerNotification = sw.Elapsed.TotalMilliseconds / notificationCount;
-            
-            Console.WriteLine($"Total time for {notificationCount} notifications: {sw.Elapsed.TotalMilliseconds:F2}ms");
-            Console.WriteLine($"Average time per notification: {avgTimePerNotification:F2}ms");
-
-            Assert.True(avgTimePerNotification < 50, 
-                $"Average notification time too high: {avgTimePerNotification:F2}ms per notification");
+            counter.Count.Should().Be(notificationCount + 1, "every notification must have been handled");
+            (sw.Elapsed.TotalMilliseconds / notificationCount).Should().BeLessThan(100, "average time per notification once warm");
         }
 
+        private static ServiceProvider Build()
+        {
+            var services = new ServiceCollection();
+            services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Error));
+            services.AddTransient<INotificationHandler<QuickTestNotification>, QuickTestHandler>();
+            services.AddMediator(options =>
+            {
+                options.EnablePersistence = false;
+                options.NotificationWorkerCount = 1;
+                options.ChannelCapacity = 100;
+            });
+            return services.BuildServiceProvider();
+        }
+    }
+
+    public sealed class HandledCounter
+    {
+        private int _count;
+        public int Count => Volatile.Read(ref _count);
+        public void Increment() => Interlocked.Increment(ref _count);
     }
 
     public class QuickTestNotification : INotification
     {
         public string Message { get; set; } = string.Empty;
+        public HandledCounter? Counter { get; set; }
     }
 
     public class QuickTestHandler : INotificationHandler<QuickTestNotification>
     {
         public Task Handle(QuickTestNotification notification, CancellationToken cancellationToken)
         {
+            notification.Counter?.Increment();
             return Task.CompletedTask;
         }
     }

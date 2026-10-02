@@ -96,6 +96,14 @@ namespace Mediator.Tests
             using var serviceProvider = services.BuildServiceProvider();
             var mediator = serviceProvider.GetRequiredService<IMediator>();
             
+            // Warm up first so the measurement excludes one-time JIT and DI initialization.
+            await mediator.Publish(new TestEmailNotification { To = "warmup@example.com", Subject = "Warm-up", Body = "Warm-up" });
+            var warmupTimeout = DateTime.UtcNow.AddMilliseconds(5000);
+            while (tracker.ProcessedCount < 1 && DateTime.UtcNow < warmupTimeout)
+            {
+                await Task.Delay(1);
+            }
+
             // Act: Single notification with precise timing
             var stopwatch = Stopwatch.StartNew();
             
@@ -108,7 +116,7 @@ namespace Mediator.Tests
 
             // Wait for processing with timeout
             var timeout = DateTime.UtcNow.AddMilliseconds(2000);
-            while (tracker.ProcessedCount < 1 && DateTime.UtcNow < timeout)
+            while (tracker.ProcessedCount < 2 && DateTime.UtcNow < timeout)
             {
                 await Task.Delay(1);
             }
@@ -122,7 +130,7 @@ namespace Mediator.Tests
             Assert.True(latency.TotalMilliseconds < 100, 
                 $"Single notification latency too high: {latency.TotalMilliseconds:F1}ms (expected < 100ms)");
             
-            Assert.Equal(1, tracker.ProcessedCount);
+            Assert.Equal(2, tracker.ProcessedCount);
         }
 
         [Fact]
@@ -145,6 +153,9 @@ namespace Mediator.Tests
             using var serviceProvider = services.BuildServiceProvider();
             var mediator = serviceProvider.GetRequiredService<IMediator>();
             
+            // Warm up so the measurement excludes one-time JIT and channel initialization.
+            await mediator.Publish(new TestEmailNotification { To = "warmup@example.com", Subject = "Warm-up", Body = "Warm-up" });
+
             // Act: Measure pure queuing speed (publish operations only)
             var stopwatch = Stopwatch.StartNew();
             
