@@ -8,10 +8,10 @@
     <WarningsNotAsErrors>NU1510</WarningsNotAsErrors>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     
-    <!-- Versioning -->
-    <Version>2.0.12</Version>
-    <AssemblyVersion>2.0.12.0</AssemblyVersion>
-    <FileVersion>2.0.12.0</FileVersion>
+    <!-- Versioning: set by the Release workflow from git tags (GitVersion). Local builds use the placeholder. -->
+    <Version>0.0.0-dev</Version>
+    <AssemblyVersion>0.0.0.0</AssemblyVersion>
+    <FileVersion>0.0.0.0</FileVersion>
     
     <!-- Package metadata -->
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
