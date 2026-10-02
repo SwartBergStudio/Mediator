@@ -20,6 +20,7 @@ All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator
   - This works under Native AOT, including requests with value-type responses (`IRequest<int>`, `IRequest<Guid>`). Registering with `AddTransient(typeof(IPipelineBehavior<,>), ...)` fails for those because the DI container can't close them without dynamic code.
   - `AddMediator(assemblies)` honours the same attribute.
 - **`INotificationRetryPersistence` (optional).** Lets a store save a retry item together with its retry time in one step, so it is never briefly visible as ready. `FileNotificationPersistence` implements it. Stores shared by several app instances should implement it too.
+- **Persistence samples for Redis and EF Core** (`samples/`, not packages). Both are safe for several app instances: leases, atomic claims and atomic retry scheduling. Shared contract tests run in CI against SQLite and a real Redis server.
 - **`JsonNotificationSerializer(JsonSerializerOptions)`.** Accepts a source-generated `JsonSerializerContext`, so persistence works under Native AOT.
 - **`AddMediatorCore()` and `MediatorRegistry`.** These are the reflection-free registration entry points used by the generator.
 - **Package icon** for both packages.

@@ -263,10 +263,36 @@ services.AddMediator(options =>
 Register your own implementations **before** calling `AddMediator` / `AddMediatorCore`, and they will be used instead of the defaults:
 
 ```csharp
-services.AddSingleton<INotificationPersistence, SqlServerNotificationPersistence>();
-services.AddSingleton<INotificationSerializer, MyNotificationSerializer>();
+services.AddSingleton<INotificationPersistence, MyNotificationPersistence>();
+services.AddSingleton<INotificationSerializer, MyNotificationSerializer>(); // optional
 services.AddMediator(options => options.EnablePersistence = true, typeof(Program).Assembly);
 ```
+
+The built-in `FileNotificationPersistence` suits a single app instance. When several instances should share one store, use a shared database or Redis. The repository includes two complete, tested samples you can copy into your app. They're samples, not packages, so the library doesn't force a Redis or EF Core dependency on anyone:
+
+| Sample | Store | Notes |
+|---|---|---|
+| [`samples/Mediator.Persistence.Redis`](samples/Mediator.Persistence.Redis) | Redis (StackExchange.Redis) | Claims due items atomically with a Lua script |
+| [`samples/Mediator.Persistence.EfCore`](samples/Mediator.Persistence.EfCore) | Any EF Core relational provider (SQL Server, PostgreSQL, SQLite, ...) | Uses `IDbContextFactory`; claims items with a conditional update |
+
+Both samples are safe for several app instances sharing one store:
+- **Leases.** An instance that picks up a notification holds it for `LeaseDuration`. If the instance stops, another one takes over after the lease expires.
+- **Grace period for new notifications.** The publishing instance handles a new notification in memory, so other instances only treat it as abandoned once the lease has passed.
+- **Atomic retries.** Retry items are saved together with their retry time (`INotificationRetryPersistence`).
+
+Both pass the same contract tests (`samples/Mediator.Persistence.Samples.Tests`), which CI runs against SQLite and a real Redis server.
+
+```csharp
+// Redis
+services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect("localhost:6379"));
+services.AddSingleton<INotificationPersistence, RedisNotificationPersistence>();
+
+// EF Core (create the MediatorNotifications table with a migration or EnsureCreated)
+services.AddDbContextFactory<NotificationDbContext>(o => o.UseSqlServer(connectionString));
+services.AddSingleton<INotificationPersistence, EfCoreNotificationPersistence>();
+```
+
+These store each notification in its own short transaction. They aren't a *transactional outbox*: the notification isn't saved in the same database transaction as your business data. For work that must commit together with your data, use `PublishAndWait` inside that transaction.
 
 A custom `INotificationPersistence` should:
 - **Store `NotificationWorkItem.TargetHandlerType`** and return it along with the other fields. That's how a retry knows which single handler to run. If it isn't stored, retries still work, but run all of the notification's handlers again.

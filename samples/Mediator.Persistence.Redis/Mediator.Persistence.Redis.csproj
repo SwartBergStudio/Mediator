@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Sample: Redis-backed notification persistence. Copy RedisNotificationPersistence.cs into your app. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StackExchange.Redis" Version="3.3.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- In an application this is: <PackageReference Include="SwartBerg.Mediator" Version="..." /> -->
+    <ProjectReference Include="..\..\src\Mediator\Mediator.csproj" />
+  </ItemGroup>
+
+</Project>
