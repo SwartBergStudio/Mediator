@@ -153,6 +153,9 @@ namespace Mediator.Tests
             using var serviceProvider = services.BuildServiceProvider();
             var mediator = serviceProvider.GetRequiredService<IMediator>();
             
+            // Warm up so the measurement excludes one-time JIT and channel initialization.
+            await mediator.Publish(new TestEmailNotification { To = "warmup@example.com", Subject = "Warm-up", Body = "Warm-up" });
+
             // Act: Measure pure queuing speed (publish operations only)
             var stopwatch = Stopwatch.StartNew();
             

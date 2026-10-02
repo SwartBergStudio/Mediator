@@ -1,65 +1,50 @@
 namespace Mediator.Core;
 
 /// <summary>
-/// Composite facade that implements IMediator by delegating to specialized handlers.
-/// This is the main entry point for the mediat pattern, delegating Send and Publish operations
-/// to their respective specialized handlers (RequestDispatcher, CommandDispatcher, NotificationPublisher).
+/// Facade that implements <see cref="IMediator"/> by delegating to the specialized dispatchers
+/// (<see cref="IRequestDispatcher"/>, <see cref="ICommandDispatcher"/>, <see cref="INotificationPublisher"/>,
+/// <see cref="IStreamRequestDispatcher"/>).
 /// </summary>
-internal sealed class Mediator : IMediator
+/// <remarks>
+/// Dispatchers are resolved from the scope on first use rather than in the constructor, so a scope that only sends one
+/// request creates one dispatcher. Replacing a dispatcher registration in DI still takes effect.
+/// </remarks>
+internal sealed class Mediator(IServiceProvider serviceProvider) : IMediator
 {
-    private readonly IRequestDispatcher _requestDispatcher;
-    private readonly ICommandDispatcher _commandDispatcher;
-    private readonly INotificationPublisher _notificationPublisher;
-    private readonly IStreamRequestDispatcher _streamRequestDispatcher;
-
-    /// <summary>
-    /// Initializes a new instance of the CompositeMediator with specialized handlers.
-    /// </summary>
-    /// <param name="requestDispatcher">Handles Send&lt;TResponse&gt; operations.</param>
-    /// <param name="commandDispatcher">Handles Send operations (commands).</param>
-    /// <param name="notificationPublisher">Handles Publish operations.</param>
-    /// <param name="streamRequestDispatcher">Handles CreateStream operations.</param>
-    public Mediator(
-        IRequestDispatcher requestDispatcher,
-        ICommandDispatcher commandDispatcher,
-        INotificationPublisher notificationPublisher,
-        IStreamRequestDispatcher streamRequestDispatcher)
-    {
-        _requestDispatcher = requestDispatcher;
-        _commandDispatcher = commandDispatcher;
-        _notificationPublisher = notificationPublisher;
-        _streamRequestDispatcher = streamRequestDispatcher;
-    }
+    private IRequestDispatcher? _requestDispatcher;
+    private ICommandDispatcher? _commandDispatcher;
+    private INotificationPublisher? _notificationPublisher;
+    private IStreamRequestDispatcher? _streamRequestDispatcher;
 
     /// <summary>
     /// Sends a request and awaits a response.
     /// </summary>
     public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
-        => _requestDispatcher.Send(request, cancellationToken);
+        => (_requestDispatcher ??= serviceProvider.GetRequiredService<IRequestDispatcher>()).Send(request, cancellationToken);
 
     /// <summary>
     /// Sends a generic command without response.
     /// </summary>
     public Task Send<TRequest>(TRequest request, CancellationToken cancellationToken = default)
         where TRequest : IRequest
-        => _commandDispatcher.Send(request, cancellationToken);
+        => (_commandDispatcher ??= serviceProvider.GetRequiredService<ICommandDispatcher>()).Send(request, cancellationToken);
 
     /// <summary>
     /// Sends a non-generic command without response.
     /// </summary>
     public Task Send(IRequest request, CancellationToken cancellationToken = default)
-        => _commandDispatcher.Send(request, cancellationToken);
+        => (_commandDispatcher ??= serviceProvider.GetRequiredService<ICommandDispatcher>()).Send(request, cancellationToken);
 
     /// <summary>
     /// Publishes a notification for background processing.
     /// </summary>
     public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
         where TNotification : INotification
-        => _notificationPublisher.Publish(notification, cancellationToken);
+        => (_notificationPublisher ??= serviceProvider.GetRequiredService<INotificationPublisher>()).Publish(notification, cancellationToken);
 
     /// <summary>
     /// Sends a streaming request and returns an async enumerable of response items.
     /// </summary>
     public IAsyncEnumerable<TResponse> CreateStream<TResponse>(IStreamRequest<TResponse> request, CancellationToken cancellationToken = default)
-        => _streamRequestDispatcher.CreateStream(request, cancellationToken);
+        => (_streamRequestDispatcher ??= serviceProvider.GetRequiredService<IStreamRequestDispatcher>()).CreateStream(request, cancellationToken);
 }

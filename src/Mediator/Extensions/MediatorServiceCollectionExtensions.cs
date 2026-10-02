@@ -54,11 +54,14 @@ public static class MediatorServiceCollectionExtensions
             services.Configure(configureOptions);
 
         services.TryAddSingleton<IScopeProvider, DefaultScopeProvider>();
-        services.TryAddScoped<IRequestDispatcher, RequestDispatcher>();
-        services.TryAddScoped<ICommandDispatcher, CommandDispatcher>();
+        services.TryAddSingleton<DispatchRuntime>();
+        // The mediator and dispatchers hold no state of their own (the shared state lives in the DispatchRuntime singleton),
+        // so they are transient: cheap to create per scope, and handlers still resolve from the caller's scope.
+        services.TryAddTransient<IRequestDispatcher, RequestDispatcher>();
+        services.TryAddTransient<ICommandDispatcher, CommandDispatcher>();
         services.TryAddSingleton<INotificationPublisher, NotificationPublisher>();
-        services.TryAddScoped<IStreamRequestDispatcher, StreamRequestDispatcher>();
-        services.TryAddScoped<IMediator, Core.Mediator>();
+        services.TryAddTransient<IStreamRequestDispatcher, StreamRequestDispatcher>();
+        services.TryAddTransient<IMediator, Core.Mediator>();
 
         // Persistence and serialization are only registered when explicitly enabled. The options delegate is
         // evaluated here so the flag is known at registration time.
