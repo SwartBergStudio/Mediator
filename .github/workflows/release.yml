@@ -96,7 +96,7 @@ jobs:
       id: nuget-login
       uses: NuGet/login@v1
       with:
-        user: ${{ secrets.NUGET_USER }} # nuget.org profile name (not email)
+        user: SwartBerg # nuget.org profile that owns the package (public, not a secret)
 
     - name: Push to NuGet
       run: dotnet nuget push ./packages/*.nupkg --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
