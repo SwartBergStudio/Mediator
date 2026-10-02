@@ -2,21 +2,13 @@
 
 All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator. Versions follow [Semantic Versioning](https://semver.org/); release dates and packages are on the [Releases](https://github.com/SwartBergStudio/Mediator/releases) page.
 
-## Unreleased
+## 3.1.0
 
 ### Added
 - **Pipeline behaviors for requests without a response.** The new `IPipelineBehavior<TRequest>` (with `RequestHandlerDelegate`) wraps `IRequest` handlers such as commands, in registration order. Previously, behaviors only ran for `IRequest<TResponse>`, so a validation behavior silently skipped these requests.
   - Open generic versions can be listed in `[assembly: MediatorPipelineBehaviors(...)]` next to the other behaviors, and work under Native AOT.
 - **`IMediator.PublishAndWait(notification)`.** Runs a notification's handlers now, one after another, in the caller's DI scope, and completes when they have finished. The first exception reaches the caller.
   - Use it for work that must succeed or fail with the caller, such as domain events in the same `DbContext` or transaction. `Publish` keeps its background behavior.
-
-### Upgrade notes
-- **Nothing to change.** Both additions are opt-in.
-- **Custom `IMediator` implementations still compile.** `PublishAndWait` is a default interface method; on a custom implementation that doesn't override it, it throws `NotSupportedException`.
-
-## 3.1.0 (unreleased)
-
-### Added
 - **Native AOT and trimming support.** The new `SwartBerg.Mediator.SourceGenerator` package generates `AddMediatorHandlers()` per project. It registers every handler and pre-creates the typed dispatchers at compile time, so no reflection runs at runtime.
   - The library itself is now marked AOT-compatible (`IsAotCompatible`).
   - It reports diagnostics `MEDGEN001`–`MEDGEN004`, described in the README.
@@ -35,6 +27,7 @@ All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator
 - **AOT-safe JSON without a format change.** File persistence and `JsonNotificationSerializer` write JSON with `Utf8JsonWriter`. The on-disk and payload formats are byte-for-byte unchanged, and files written by 3.0 are still read.
 
 ### Upgrade notes (behavior changes)
+- **Custom `IMediator` implementations still compile.** `PublishAndWait` is a default interface method; on a custom implementation that doesn't override it, it throws `NotSupportedException`.
 - **No more "Request/Command … failed" log entries.** Handler exceptions still reach your code unchanged; your host (ASP.NET Core, Blazor) logs them as before. Failures in background notification handlers are still logged by the mediator.
 - **`IMediator` no longer routes through `IRequestDispatcher` / `ICommandDispatcher` / `IStreamRequestDispatcher`.** Those services still work when injected directly. Replacing them in DI only affected `IMediator` if you deliberately decorated them to intercept every call.
 - **Transient `IMediator`.** Resolving it from the root provider, for example in a singleton, is no longer rejected by scope validation. Handlers resolved that way come from the root provider, so prefer resolving the mediator inside a scope.
