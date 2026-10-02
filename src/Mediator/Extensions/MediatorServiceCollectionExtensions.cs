@@ -1,6 +1,6 @@
-using System.Linq;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
-using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Mediator;
 
@@ -12,125 +12,72 @@ public static class MediatorServiceCollectionExtensions
     /// <summary>
     /// Registers the Mediator infrastructure and all handlers found in the provided assemblies.
     /// </summary>
+    /// <remarks>
+    /// Handlers are discovered with reflection. For trimmed or Native AOT apps use <see cref="AddMediatorCore"/>
+    /// together with the source-generated <c>AddMediatorHandlers()</c> from the SwartBerg.Mediator.SourceGenerator package.
+    /// </remarks>
     public static IServiceCollection AddMediator(this IServiceCollection services, params Assembly[] assemblies)
-    {
-        return services.AddMediator(options => { }, assemblies);
-    }
+        => services.AddMediator(static _ => { }, assemblies);
 
     /// <summary>
     /// Registers the Mediator infrastructure with configuration and all handlers found in the provided assemblies.
     /// </summary>
+    /// <remarks>
+    /// Handlers are discovered with reflection. For trimmed or Native AOT apps use <see cref="AddMediatorCore"/>
+    /// together with the source-generated <c>AddMediatorHandlers()</c> from the SwartBerg.Mediator.SourceGenerator package.
+    /// </remarks>
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification = "Kept unannotated for backward compatibility. Trimmed/AOT apps should use AddMediatorCore + the source generator; this is documented on the method.")]
     public static IServiceCollection AddMediator(this IServiceCollection services,
         Action<MediatorOptions> configureOptions, params Assembly[] assemblies)
     {
+        ArgumentNullException.ThrowIfNull(assemblies);
+
+        services.AddMediatorCore(configureOptions);
+        HandlerRegistrations.RegisterFromAssemblies(services, assemblies);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the Mediator infrastructure without scanning for handlers. This method is trimming and
+    /// Native AOT safe; register handlers with the source-generated <c>AddMediatorHandlers()</c> or manually.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configureOptions">Optional options configuration.</param>
+    public static IServiceCollection AddMediatorCore(this IServiceCollection services, Action<MediatorOptions>? configureOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
         if (configureOptions != null)
             services.Configure(configureOptions);
 
-        services.TryAddSingleton<IScopeProvider, Core.DefaultScopeProvider>();
-        services.TryAddScoped<IRequestDispatcher, Core.RequestDispatcher>();
-        services.TryAddScoped<ICommandDispatcher, Core.CommandDispatcher>();
-        services.TryAddSingleton<INotificationPublisher, Core.NotificationPublisher>();
-        services.TryAddScoped<IStreamRequestDispatcher, Core.StreamRequestDispatcher>();
+        services.TryAddSingleton<IScopeProvider, DefaultScopeProvider>();
+        services.TryAddScoped<IRequestDispatcher, RequestDispatcher>();
+        services.TryAddScoped<ICommandDispatcher, CommandDispatcher>();
+        services.TryAddSingleton<INotificationPublisher, NotificationPublisher>();
+        services.TryAddScoped<IStreamRequestDispatcher, StreamRequestDispatcher>();
         services.TryAddScoped<IMediator, Core.Mediator>();
 
-        // Only register persistence and serialization when explicitly enabled.
-        // Evaluate the options delegate to determine the flag at registration time.
-        var options = new MediatorOptions();
-        configureOptions?.Invoke(options);
-
-        if (options.EnablePersistence)
+        // Persistence and serialization are only registered when explicitly enabled. The options delegate is
+        // evaluated here so the flag is known at registration time.
+        if (configureOptions != null)
         {
-            services.TryAddSingleton<INotificationPersistence, FileNotificationPersistence>();
-            services.TryAddSingleton<INotificationSerializer, JsonNotificationSerializer>();
+            var options = new MediatorOptions();
+            configureOptions(options);
+            if (options.EnablePersistence)
+                AddDefaultPersistence(services);
         }
-
-        RegisterHandlers(services, assemblies);
 
         return services;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void RegisterHandlers(IServiceCollection services, Assembly[] assemblies)
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification = "Persistence is opt-in. Native AOT apps should register a JsonNotificationSerializer built from a source-generated JsonSerializerContext before calling AddMediator.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = "Persistence is opt-in. Native AOT apps should register a JsonNotificationSerializer built from a source-generated JsonSerializerContext before calling AddMediator.")]
+    private static void AddDefaultPersistence(IServiceCollection services)
     {
-        if (assemblies.Length == 0) return;
-
-        var registrations = new List<(Type service, Type implementation)>(256);
-        var seenRegistrations = new HashSet<(Type, Type)>();
-
-        // Seed with existing handler registrations to prevent duplicates
-        // when AddMediator is called multiple times or handlers are manually registered
-        foreach (var descriptor in services)
-        {
-            if (descriptor.ImplementationType != null &&
-                descriptor.ServiceType.IsGenericType &&
-                IsHandlerInterface(descriptor.ServiceType.GetGenericTypeDefinition()))
-            {
-                seenRegistrations.Add((descriptor.ServiceType, descriptor.ImplementationType));
-            }
-        }
-
-        foreach (var assembly in assemblies)
-        {
-            var types = assembly.GetTypes()
-                .Where(t => t.IsClass && !t.IsAbstract && !t.IsInterface)
-                .ToArray();
-
-            foreach (var type in types)
-            {
-                foreach (var interfaceType in type.GetInterfaces())
-                {
-                    if (interfaceType.IsGenericType &&
-                        IsHandlerInterface(interfaceType.GetGenericTypeDefinition()))
-                    {
-                        var registration = (interfaceType, type);
-                        if (seenRegistrations.Add(registration))
-                        {
-                            registrations.Add(registration);
-                        }
-                    }
-                }
-            }
-        }
-
-        foreach (var (service, implementation) in registrations)
-        {
-            services.AddTransient(service, implementation);
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsHandlerInterface(Type type)
-    {
-        return type == typeof(IRequestHandler<,>) ||
-               type == typeof(IRequestHandler<>) ||
-               type == typeof(INotificationHandler<>) ||
-               type == typeof(IStreamRequestHandler<,>) ||
-               type == typeof(IStreamPipelineBehavior<,>);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void TryAddSingleton<TService, TImplementation>(this IServiceCollection services)
-        where TService : class
-        where TImplementation : class, TService
-    {
-        var serviceType = typeof(TService);
-
-        if (!services.Any(descriptor => descriptor.ServiceType == serviceType))
-        {
-            services.AddSingleton<TService, TImplementation>();
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void TryAddScoped<TService, TImplementation>(this IServiceCollection services)
-        where TService : class
-        where TImplementation : class, TService
-    {
-        var serviceType = typeof(TService);
-
-        if (!services.Any(descriptor => descriptor.ServiceType == serviceType))
-        {
-            services.AddScoped<TService, TImplementation>();
-        }
+        services.TryAddSingleton<INotificationPersistence>(static _ => new FileNotificationPersistence());
+        services.TryAddSingleton<INotificationSerializer>(static _ => new JsonNotificationSerializer());
     }
 }

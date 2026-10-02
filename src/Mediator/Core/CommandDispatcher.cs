@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
-using System.Reflection;
-using System.Runtime.CompilerServices;
+using Mediator.Core.Wrappers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -14,42 +12,31 @@ internal sealed class CommandDispatcher : ICommandDispatcher
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<CommandDispatcher> _logger;
-    private readonly MediatorOptions _options;
+    private readonly bool _continueOnCapturedContext;
     private readonly bool _isDebugEnabled;
-
-    private readonly ConcurrentDictionary<Type, Func<object, object, CancellationToken, Task>> _commandInvokers = new();
-    private readonly ConcurrentDictionary<Type, Type> _handlerTypeCache = new();
-
-    private static readonly MethodInfo s_invokeCommandHandlerMethod = typeof(CommandDispatcher).GetMethod(nameof(InvokeCommandHandler), BindingFlags.NonPublic | BindingFlags.Static)!;
 
     public CommandDispatcher(IServiceProvider serviceProvider, ILogger<CommandDispatcher> logger, IOptions<MediatorOptions> options)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
-        _options = options.Value;
+        _continueOnCapturedContext = !options.Value.UseConfigureAwaitGlobally;
         _isDebugEnabled = _logger.IsEnabled(LogLevel.Debug);
     }
 
     public async Task Send<TRequest>(TRequest request, CancellationToken cancellationToken = default)
         where TRequest : IRequest
     {
+        // The command type is known statically, so the handler is resolved without the wrapper cache.
         var requestType = typeof(TRequest);
-        if (_isDebugEnabled) _logger.LogDebug("Processing command {CommandType}", requestType.Name);
+        LogStarted(requestType);
 
         try
         {
-            var scopedProvider = _serviceProvider;
-            var invoker = GetOrCreateCommandInvoker(requestType);
-            var handler = GetScopedHandler(requestType, scopedProvider);
+            var task = CommandHandlerWrapper<TRequest>.Handle(request, _serviceProvider, cancellationToken);
+            if (!task.IsCompletedSuccessfully)
+                await task.ConfigureAwait(_continueOnCapturedContext);
 
-            var task = invoker(handler, request!, cancellationToken);
-            if (task.IsCompletedSuccessfully)
-            {
-                if (_isDebugEnabled) _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
-                return;
-            }
-            await InternalHelpers.AwaitConfigurable(task, _options.UseConfigureAwaitGlobally);
-            if (_isDebugEnabled) _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
+            LogCompleted(requestType);
         }
         catch (Exception ex)
         {
@@ -60,23 +47,18 @@ internal sealed class CommandDispatcher : ICommandDispatcher
 
     public async Task Send(IRequest request, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+
         var requestType = request.GetType();
-        if (_isDebugEnabled) _logger.LogDebug("Processing command {CommandType}", requestType.Name);
+        LogStarted(requestType);
 
         try
         {
-            var scopedProvider = _serviceProvider;
-            var invoker = GetOrCreateCommandInvoker(requestType);
-            var handler = GetScopedHandler(requestType, scopedProvider);
+            var task = HandlerWrapperCache.GetCommandWrapper(requestType).Handle(request, _serviceProvider, cancellationToken);
+            if (!task.IsCompletedSuccessfully)
+                await task.ConfigureAwait(_continueOnCapturedContext);
 
-            var task = invoker(handler, request, cancellationToken);
-            if (task.IsCompletedSuccessfully)
-            {
-                if (_isDebugEnabled) _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
-                return;
-            }
-            await InternalHelpers.AwaitConfigurable(task, _options.UseConfigureAwaitGlobally);
-            if (_isDebugEnabled) _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
+            LogCompleted(requestType);
         }
         catch (Exception ex)
         {
@@ -85,35 +67,13 @@ internal sealed class CommandDispatcher : ICommandDispatcher
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Func<object, object, CancellationToken, Task> GetOrCreateCommandInvoker(Type requestType)
+    private void LogStarted(Type requestType)
     {
-        return _commandInvokers.GetOrAdd(requestType, _ =>
-        {
-            var generic = s_invokeCommandHandlerMethod.MakeGenericMethod(requestType);
-            return (Func<object, object, CancellationToken, Task>)generic.CreateDelegate(typeof(Func<object, object, CancellationToken, Task>));
-        });
+        if (_isDebugEnabled) _logger.LogDebug("Processing command {CommandType}", requestType.Name);
     }
 
-    private static Task InvokeCommandHandler<TRequest>(object handlerObj, object requestObj, CancellationToken token)
-        where TRequest : IRequest
+    private void LogCompleted(Type requestType)
     {
-        var handler = (IRequestHandler<TRequest>)handlerObj;
-        return handler.Handle((TRequest)requestObj, token);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private object GetScopedHandler(Type requestType, IServiceProvider scopedProvider)
-    {
-        var handlerType = _handlerTypeCache.GetOrAdd(requestType,
-            t => typeof(IRequestHandler<>).MakeGenericType(t));
-        var handler = scopedProvider.GetService(handlerType);
-        if (handler == null)
-        {
-            _logger.LogError("Handler not found for command type {CommandType}", requestType.Name);
-            throw new InvalidOperationException($"Handler not found: {handlerType.Name}");
-        }
-        if (_isDebugEnabled) _logger.LogDebug("Resolved handler for command {CommandType}", requestType.Name);
-        return handler;
+        if (_isDebugEnabled) _logger.LogDebug("Command {CommandType} completed successfully", requestType.Name);
     }
 }
