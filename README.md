@@ -24,8 +24,8 @@ See [CHANGELOG.md](https://github.com/SwartBergStudio/Mediator/blob/main/CHANGEL
 - **High performance**: strongly-typed dispatch, cached per message type, with no per-call reflection or boxing. ([benchmarks](#benchmarks))
 - **Native AOT and trimming**: optional source generator registers handlers at compile time
 - **Streaming**: `IAsyncEnumerable<T>` responses via `CreateStream`, with stream pipeline behaviors
-- **Background processing**: non-blocking notification dispatch with a worker pool
-- **Pipeline behaviors**: plug-in cross-cutting concerns for requests and streams
+- **Notifications your way**: background processing with a worker pool (`Publish`), or awaited in the caller's scope (`PublishAndWait`)
+- **Pipeline behaviors**: plug-in cross-cutting concerns for requests, requests without a response, and streams
 - **Configurable persistence**: pluggable store and serializer, with retries and exponential backoff
 - **UI-safe async**: no extra awaits on the request path, and `ConfigureAwait(false)` on the mediator's own background awaits (see [Scopes, Blazor and ConfigureAwait](#scopes-blazor-and-configureawait))
 - **Lightweight**: low allocations, minimal dependencies
@@ -156,14 +156,25 @@ await foreach (var token in mediator.CreateStream(new ChatPrompt("hello streamin
 
 ## Pipeline Behaviors
 
-Behaviors wrap handlers for cross-cutting concerns such as validation, logging or transactions. The first one registered is the outermost.
+Behaviors wrap handlers for cross-cutting concerns such as validation, logging, exception handling or transactions. The first one registered is the outermost.
+
+There is one behavior interface per request shape:
+
+| Request | Behavior interface |
+|---|---|
+| `IRequest<TResponse>` (returns a value) | `IPipelineBehavior<TRequest, TResponse>` |
+| `IRequest` (returns nothing, e.g. a command) | `IPipelineBehavior<TRequest>` |
+| `IStreamRequest<TResponse>` | `IStreamPipelineBehavior<TRequest, TResponse>` |
 
 ### Open generic behaviors (recommended)
 
 Declare open generic behaviors once per project that contains handlers. The behaviors are listed in execution order:
 
 ```csharp
-[assembly: MediatorPipelineBehaviors(typeof(LoggingBehavior<,>), typeof(ValidationBehavior<,>))]
+[assembly: MediatorPipelineBehaviors(
+    typeof(LoggingBehavior<,>),
+    typeof(ValidationBehavior<,>),
+    typeof(CommandValidationBehavior<>))]
 
 public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
@@ -174,10 +185,21 @@ public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TReques
         return await next();
     }
 }
+
+// Same idea for requests that return nothing.
+public class CommandValidationBehavior<TRequest> : IPipelineBehavior<TRequest>
+    where TRequest : IRequest
+{
+    public async Task Handle(TRequest request, RequestHandlerDelegate next, CancellationToken cancellationToken)
+    {
+        ValidateRequest(request);
+        await next();
+    }
+}
 ```
 
 Each listed behavior is registered closed (for example `ValidationBehavior<CreateUser, Guid>`) for every request handled in that project.
-- **Constraints decide where it applies.** For example, `where TRequest : ICommand` limits a behavior to commands.
+- **Constraints decide where it applies.** For example, `where TRequest : IAuditable` (a marker interface of your own) limits a behavior to requests that implement it. `IPipelineBehavior<TRequest>` types apply only to requests without a response, and `IPipelineBehavior<TRequest, TResponse>` types only to requests with one.
 - **Both registration styles honour it.** The source generator emits these registrations at compile time, and `AddMediator(assemblies)` applies the same attribute when scanning.
 - **Stream behaviors work the same way.** Open generic `IStreamPipelineBehavior<,>` types can be listed in the same attribute.
 
@@ -196,11 +218,31 @@ Closed (non-generic) stream behaviors are discovered automatically.
 
 ## Notifications and Persistence
 
-`Publish` queues the notification on an in-memory channel and returns immediately. Background workers then invoke every handler. A failing handler is logged and does not affect the other handlers.
+There are two ways to publish a notification:
 
-> Notification handlers run in the background in a **new DI scope**, not the publisher's. Scoped services such as a per-user `IUserSession` are therefore fresh instances there. Put what the handlers need, such as the user id, in the notification itself.
+| | `Publish` (background) | `PublishAndWait` (awaited) |
+|---|---|---|
+| Returns | As soon as the notification is queued | After every handler has finished |
+| Handlers run | Later, on background workers, all started together | Now, one after another in registration order |
+| DI scope | A new scope per notification | The caller's scope (same `DbContext`, same user session) |
+| A handler fails | Logged; other handlers still run; retried if persistence is on | The exception reaches the caller; the remaining handlers are skipped |
+| Persistence | Optional (crash-safe, with retries) | Not used |
 
-With `EnablePersistence = true`, each notification is also written to storage before it is queued:
+**Use `Publish` for side effects that shouldn't slow down or fail the caller:** emails, push or "in progress" updates, cache refreshes, audit trails, integration events. The user gets a response sooner because these run afterwards. The work still uses the same server, so this improves response time rather than total capacity.
+
+**Use `PublishAndWait` when the work must succeed or fail with the caller:** for example, domain events that update related data in the same `DbContext` or transaction, or handlers that need the current user's scoped session.
+
+```csharp
+await mediator.PublishAndWait(new InvoiceApproved(invoice.Id), cancellationToken); // same scope, before SaveChanges
+await dbContext.SaveChangesAsync(cancellationToken);
+await mediator.Publish(new SendInvoiceEmail(invoice.Id), cancellationToken);       // background side effect
+```
+
+> With `Publish`, handlers run in a **new DI scope**, not the publisher's. Scoped services such as a per-user `IUserSession` are therefore fresh instances there. Put what the handlers need, such as the user id, in the notification itself, or use `PublishAndWait`.
+
+### Persistence for background notifications
+
+With `EnablePersistence = true`, each notification published with `Publish` is also written to storage before it is queued:
 
 - A notification is removed from storage once all its handlers succeed.
 - If a handler fails, the notification is retried with exponential backoff, up to `MaxRetryAttempts`, and then dropped. A retry runs all handlers for that notification again, so handlers should be idempotent.
@@ -277,7 +319,7 @@ services.AddMediatorHandlers();
 
 **Scopes.** ASP.NET Core creates a DI scope per web request, and Blazor creates one per circuit (per user connection). Request, command and stream handlers, and their behaviors, are resolved from the scope of the code that calls the mediator. Scoped services such as `IUserSession` or a `DbContext` are therefore the caller's own. That holds whether `IMediator` is injected into a component, a controller or a service.
 
-**Exceptions.** Request, command and stream handlers run inside your `await`. The mediator doesn't wrap or log their exceptions: they reach your code, and your host's logging, unchanged. Background notification failures are logged by the mediator, because nobody awaits them.
+**Exceptions.** Request, command and stream handlers, and `PublishAndWait` notification handlers, run inside your `await`. The mediator doesn't wrap or log their exceptions: they reach your code, and your host's logging, unchanged. Background notification failures are logged by the mediator, because nobody awaits them.
 
 **ConfigureAwait.** The mediator adds no `await` of its own between your code and a request handler. So:
 - In a Blazor component, `await Mediator.Send(...)` resumes on the component's synchronization context, as usual, so `StateHasChanged` and UI updates work.
@@ -329,11 +371,11 @@ Dispatch overhead measured with BenchmarkDotNet on .NET 10, x64 Linux:
 
 | Scenario | Time | Allocated |
 |---|---|---|
-| Request | 67 ns | 64 B |
-| Command | 31 ns | 24 B |
-| Request + 1 pipeline behavior | 129 ns | 288 B |
-| New DI scope + request | 160 ns | 224 B |
-| New DI scope + async handler (awaits) + 1 behavior | 2.07 µs | 664 B |
+| Request | 64 ns | 64 B |
+| Command (request without a response) | 58 ns | 64 B |
+| Request + 1 pipeline behavior | 130 ns | 288 B |
+| New DI scope + request | 174 ns | 232 B |
+| New DI scope + async handler (awaits) + 1 behavior | 2.17 µs | 672 B |
 
 The last row is closest to a real web request (new scope, a handler that awaits, one behavior); most of that time is the handler's own async work. Numbers vary per machine; run the benchmarks yourself:
 

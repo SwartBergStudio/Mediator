@@ -24,6 +24,7 @@ using (var previousRun = new FileNotificationPersistence(persistenceDirectory))
 var services = new ServiceCollection();
 services.AddLogging(builder => builder.AddSimpleConsole().SetMinimumLevel(LogLevel.Critical));
 services.AddSingleton<Tracker>();
+services.AddScoped<UserSession>();
 services.AddTransient<IPipelineBehavior<GetGreeting, string>, UppercaseGreeting>();
 // CountingBehavior<,> is declared with [assembly: MediatorPipelineBehaviors] in Messages.cs, so the generator registers
 // it closed per request. (AddTransient(typeof(IPipelineBehavior<,>), ...) fails under Native AOT for value-type responses.)
@@ -55,6 +56,14 @@ using (var provider = services.BuildServiceProvider())
 
     await mediator.Send(new RecordVisit("home"));
     Check(tracker.Events.Contains("visit:home"), "command");
+    Check(tracker.Events.Contains("command-behavior:RecordVisit"), "declared command pipeline behavior");
+
+    using (var scope = provider.CreateScope())
+    {
+        scope.ServiceProvider.GetRequiredService<UserSession>().UserId = "erin";
+        await scope.ServiceProvider.GetRequiredService<IMediator>().PublishAndWait(new InvoiceApproved { InvoiceId = "7" });
+        Check(tracker.Events.Contains("approved:7:by:erin"), "PublishAndWait ran the handler before returning, in the caller's scope");
+    }
 
     var streamed = new List<int>();
     await foreach (var i in mediator.CreateStream(new CountTo(3)))

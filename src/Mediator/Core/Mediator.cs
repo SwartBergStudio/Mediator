@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Options;
+
 namespace Mediator.Core;
 
 /// <summary>
@@ -8,6 +10,7 @@ namespace Mediator.Core;
 internal sealed class Mediator(IServiceProvider serviceProvider) : IMediator
 {
     private INotificationPublisher? _notificationPublisher;
+    private bool? _continueOnCapturedContext;
 
     /// <summary>
     /// Sends a request and awaits a response.
@@ -34,6 +37,16 @@ internal sealed class Mediator(IServiceProvider serviceProvider) : IMediator
     public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
         where TNotification : INotification
         => (_notificationPublisher ??= serviceProvider.GetRequiredService<INotificationPublisher>()).Publish(notification, cancellationToken);
+
+    /// <summary>
+    /// Invokes the notification's handlers now, sequentially, in this mediator's DI scope.
+    /// </summary>
+    public Task PublishAndWait<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
+        where TNotification : INotification
+    {
+        _continueOnCapturedContext ??= !(serviceProvider.GetService<IOptions<MediatorOptions>>()?.Value.UseConfigureAwaitGlobally ?? true);
+        return Dispatch.PublishAndWait(notification, serviceProvider, _continueOnCapturedContext.Value, cancellationToken);
+    }
 
     /// <summary>
     /// Sends a streaming request and returns an async enumerable of response items.

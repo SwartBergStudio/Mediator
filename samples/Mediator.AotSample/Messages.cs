@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using Mediator;
 
-[assembly: MediatorPipelineBehaviors(typeof(Mediator.AotSample.CountingBehavior<,>))]
+[assembly: MediatorPipelineBehaviors(typeof(Mediator.AotSample.CountingBehavior<,>), typeof(Mediator.AotSample.AuditCommands<>))]
 
 namespace Mediator.AotSample;
 
@@ -98,6 +98,37 @@ public sealed class CountingBehavior<TRequest, TResponse>(Tracker tracker) : IPi
     {
         tracker.Add($"behavior:{typeof(TRequest).Name}");
         return next();
+    }
+}
+
+/// <summary>Declared behavior for requests without a response (commands).</summary>
+public sealed class AuditCommands<TRequest>(Tracker tracker) : IPipelineBehavior<TRequest>
+    where TRequest : IRequest
+{
+    public async Task Handle(TRequest request, RequestHandlerDelegate next, CancellationToken cancellationToken)
+    {
+        tracker.Add($"command-behavior:{typeof(TRequest).Name}");
+        await next();
+    }
+}
+
+/// <summary>Scoped per caller, like a per-user session.</summary>
+public sealed class UserSession
+{
+    public string? UserId { get; set; }
+}
+
+public sealed class InvoiceApproved : INotification
+{
+    public string InvoiceId { get; set; } = string.Empty;
+}
+
+public sealed class UpdateInvoiceReadModel(Tracker tracker, UserSession session) : INotificationHandler<InvoiceApproved>
+{
+    public async Task Handle(InvoiceApproved notification, CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        tracker.Add($"approved:{notification.InvoiceId}:by:{session.UserId}");
     }
 }
 

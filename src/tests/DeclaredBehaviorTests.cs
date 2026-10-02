@@ -5,7 +5,8 @@ using Microsoft.Extensions.Logging;
 [assembly: Mediator.MediatorPipelineBehaviors(
     typeof(Mediator.Tests.CountingBehavior<,>),
     typeof(Mediator.Tests.MarkedOnlyBehavior<,>),
-    typeof(Mediator.Tests.CountingStreamBehavior<,>))]
+    typeof(Mediator.Tests.CountingStreamBehavior<,>),
+    typeof(Mediator.Tests.CountingCommandBehavior<>))]
 
 namespace Mediator.Tests
 {
@@ -29,6 +30,33 @@ namespace Mediator.Tests
 
             Implementations<IStreamPipelineBehavior<TestDelayedStreamRequest, int>>(services)
                 .Should().Contain(typeof(CountingStreamBehavior<TestDelayedStreamRequest, int>));
+        }
+
+        [Fact]
+        public void Scanning_ShouldCloseDeclaredCommandBehaviorsOverCommands()
+        {
+            var services = new ServiceCollection().AddMediator(typeof(DeclaredBehaviorTests).Assembly);
+
+            Implementations<IPipelineBehavior<TestRequestWithoutResponse>>(services)
+                .Should().Equal(typeof(CountingCommandBehavior<TestRequestWithoutResponse>));
+            Implementations<IPipelineBehavior<TestRequest, string>>(services)
+                .Should().NotContain(typeof(CountingCommandBehavior<TestRequestWithoutResponse>));
+        }
+
+        [Fact]
+        public async Task Send_Command_ShouldRunDeclaredCommandBehavior()
+        {
+            var services = new ServiceCollection();
+            services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Critical));
+            services.AddMediator(o => o.NotificationWorkerCount = 1, typeof(DeclaredBehaviorTests).Assembly);
+            using var provider = services.BuildServiceProvider();
+            var before = BehaviorCounters.Get(typeof(MarkedCommand));
+
+            var command = new MarkedCommand();
+            await provider.GetRequiredService<IMediator>().Send(command);
+
+            command.Trail.Should().Equal("command-behavior", "handler");
+            BehaviorCounters.Get(typeof(MarkedCommand)).Should().Be(before + 1);
         }
 
         [Fact]
@@ -109,6 +137,32 @@ namespace Mediator.Tests
         public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
         {
             request.Trail.Add("marked-only");
+            return next();
+        }
+    }
+
+    public sealed class MarkedCommand : IRequest
+    {
+        public List<string> Trail { get; } = new();
+    }
+
+    public sealed class MarkedCommandHandler : IRequestHandler<MarkedCommand>
+    {
+        public Task Handle(MarkedCommand request, CancellationToken cancellationToken)
+        {
+            request.Trail.Add("handler");
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>Declared behavior for requests without a response (commands).</summary>
+    public sealed class CountingCommandBehavior<TRequest> : IPipelineBehavior<TRequest>
+        where TRequest : IRequest
+    {
+        public Task Handle(TRequest request, RequestHandlerDelegate next, CancellationToken cancellationToken)
+        {
+            BehaviorCounters.Increment(typeof(TRequest));
+            (request as MarkedCommand)?.Trail.Add("command-behavior");
             return next();
         }
     }
