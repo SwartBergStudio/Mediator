@@ -141,8 +141,10 @@ namespace Mediator.Persistence
             if (!data.TryGetProperty("workItem", out var workItemData))
                 return null;
 
-            var retryAfter = data.TryGetProperty("retryAfter", out var retryProp) && retryProp.ValueKind != JsonValueKind.Null
-                ? DateTime.Parse(retryProp.GetString()!)
+            // GetDateTime keeps the UTC kind of the ISO 8601 value; DateTime.Parse converted it to local time,
+            // which delayed retries by the server's UTC offset.
+            var retryAfter = data.TryGetProperty("retryAfter", out var retryProp) && retryProp.ValueKind == JsonValueKind.String
+                ? retryProp.GetDateTime().ToUniversalTime()
                 : (DateTime?)null;
 
             if (retryAfter.HasValue && retryAfter.Value > DateTime.UtcNow)
