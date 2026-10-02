@@ -50,13 +50,13 @@ namespace Mediator.Tests
             await _mediator.Publish(notification);
             
             // Wait for background processing
-            await Task.Delay(500);
+            await Eventually.WaitUntilAsync(() => _tracker.GetHandleCount("TestNotificationHandler") > 0);
 
             // Assert
             _tracker.GetHandleCount("TestNotificationHandler").Should().BeGreaterThan(0);
             
             // Verify files are cleaned up after processing
-            await Task.Delay(300);
+            await Eventually.WaitUntilAsync(() => !Directory.Exists(_testDirectory) || Directory.GetFiles(_testDirectory, "*.json").Length == 0);
             var remainingFiles = Directory.Exists(_testDirectory) ? Directory.GetFiles(_testDirectory, "*.json") : Array.Empty<string>();
             remainingFiles.Should().BeEmpty("files should be cleaned up after processing");
         }
@@ -87,7 +87,7 @@ namespace Mediator.Tests
 
             // Act
             await mediator.Publish(notification);
-            await Task.Delay(200);
+            await Eventually.WaitUntilAsync(() => tracker.GetHandleCount("TestNotificationHandler") > 0);
 
             // Assert
             tracker.GetHandleCount("TestNotificationHandler").Should().BeGreaterThan(0);
@@ -148,7 +148,7 @@ namespace Mediator.Tests
             await mediator.Publish(new TestNotification { Message = "Retry test" });
             
             // Wait for initial attempt and retry
-            await Task.Delay(1000);
+            await Eventually.WaitUntilAsync(() => tracker.GetHandleCount("ConditionalFailingHandler") > 1);
 
             // Assert
             tracker.GetHandleCount("ConditionalFailingHandler").Should().BeGreaterThan(1, 
