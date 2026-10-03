@@ -8,6 +8,19 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # The library depends on the lowest supported Microsoft.Extensions.* versions (8.0.x) on purpose: a higher major
+      # would force every app on .NET 8/9 onto newer packages and break builds that pin 8.x/9.x (NU1605).
+      # Tests and samples are fine on their current majors too.
+      - dependency-name: "Microsoft.Extensions.*"
+        update-types: ["version-update:semver-major"]
+      # The source generator must build against Roslyn 4.8 (the .NET 8 SDK compiler). A newer Roslyn makes the
+      # generator fail to load for anyone on an older SDK (CS9057). Only patch updates are safe.
+      - dependency-name: "Microsoft.CodeAnalysis.CSharp"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # FluentAssertions 8+ is commercially licensed; stay on the Apache-licensed 6.x/7.x line.
+      - dependency-name: "FluentAssertions"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
