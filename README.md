@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/SwartBergStudio/Mediator/main/assets/icon-256.png" alt="SwartBerg.Mediator" width="160" />
-</p>
+![SwartBerg.Mediator](https://raw.githubusercontent.com/SwartBergStudio/Mediator/main/assets/icon-128.png)
 
 # SwartBerg.Mediator
 
