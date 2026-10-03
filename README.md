@@ -329,6 +329,18 @@ The generated code registers every handler and pre-creates its strongly-typed di
 | `MEDGEN002` | Warning | A handler (or its message type) is `private`/`protected` and can't be registered. Make it `internal` or `public`. |
 | `MEDGEN003` | Info | An open generic handler or behavior was skipped. List it in `[assembly: MediatorPipelineBehaviors(...)]` or register it explicitly. |
 | `MEDGEN004` | Warning | A type in `[assembly: MediatorPipelineBehaviors(...)]` isn't an open generic pipeline behavior. |
+| `MEDGEN005` | Warning | A request declared in the project has **no handler**, so sending it would fail at runtime. |
+| `MEDGEN006` | Warning | A request has **more than one handler**. Only the last one registered is used; the others never run. |
+
+`MEDGEN005` and `MEDGEN006` are reported by an analyzer included in the generator package. If a request is handled in another project, suppress the warning for that one type:
+
+```csharp
+#pragma warning disable MEDGEN005 // handled in the Billing project
+public sealed record ChargeCard(Guid OrderId) : IRequest<Receipt>;
+#pragma warning restore MEDGEN005
+```
+
+To suppress it for a whole project, use `<NoWarn>$(NoWarn);MEDGEN005</NoWarn>` or `dotnet_diagnostic.MEDGEN005.severity = none` in `.editorconfig`. To fail the build on these instead, set the severity to `error`.
 
 ### Persistence under Native AOT
 
@@ -468,6 +480,8 @@ The suites, all run by CI on every push and pull request:
 | `samples/Mediator.AotSample` | Published with **Native AOT** (warnings as errors) and run. It covers requests, value-type responses, open generic and stream behaviors, commands, streams, exceptions, notifications and persistence recovery. |
 | Package validation | Packing fails if a public API changed incompatibly since the last release |
 
+CI also publishes a code coverage report for every run, in the run summary and as a downloadable artifact.
+
 Two tests protect the generated path:
 - generated registrations must equal reflection scanning;
 - persisted payloads and files must stay byte-identical to the earlier format.
@@ -485,13 +499,7 @@ Before releasing, move the `Unreleased` entries in [CHANGELOG.md](https://github
 
 ## Contributing
 
-1. Fork the repository
-2. Create a descriptively named feature branch: `git checkout -b feature/amazing-feature`
-3. Add changes + tests
-4. Run the tests (and the benchmarks for performance-sensitive changes)
-5. Commit: `git commit -m 'Add amazing feature'`
-6. Push: `git push origin feature/amazing-feature`
-7. Open a PR
+Contributions are welcome. See [CONTRIBUTING.md](https://github.com/SwartBergStudio/Mediator/blob/main/CONTRIBUTING.md) for building, testing and the pull request checklist, and the [Code of Conduct](https://github.com/SwartBergStudio/Mediator/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
@@ -499,7 +507,7 @@ MIT License - see [LICENSE](LICENSE).
 
 ## Support
 
-Open issues for bugs or features. Provide clear reproduction steps.
+Open an [issue](https://github.com/SwartBergStudio/Mediator/issues) for bugs or feature requests, with clear reproduction steps. Report security vulnerabilities privately as described in [SECURITY.md](https://github.com/SwartBergStudio/Mediator/blob/main/SECURITY.md).
 
 ## Appreciation (Optional)
 

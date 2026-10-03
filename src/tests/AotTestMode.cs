@@ -42,7 +42,10 @@ namespace Mediator.Tests
                 .WithMessage("*No handler wrapper is registered*SourceGenerator*");
         }
 
+        // Intentionally has no handler: the test checks the failure.
+#pragma warning disable MEDGEN005
         private sealed class RequestWithoutHandler : IRequest<int>;
+#pragma warning restore MEDGEN005
     }
 }
 #endif
