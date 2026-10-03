@@ -12,12 +12,12 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0 # tags are needed for the package API baseline
       
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         # Tests run on every framework the library ships for.
         dotnet-version: |
@@ -32,7 +32,21 @@ jobs:
       run: dotnet build --no-restore --configuration Release
       
     - name: Test
-      run: dotnet test --no-build --configuration Release --verbosity normal
+      run: dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage
+
+    - name: Coverage report
+      if: always()
+      run: |
+        dotnet tool install --global dotnet-reportgenerator-globaltool --version 5.5.11
+        reportgenerator -reports:"./coverage/**/coverage.cobertura.xml" -targetdir:./coverage/report -reporttypes:"MarkdownSummaryGithub;HtmlInline"
+        cat ./coverage/report/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: coverage-report
+        path: ./coverage/report
 
     - name: Native AOT smoke test
       run: |
