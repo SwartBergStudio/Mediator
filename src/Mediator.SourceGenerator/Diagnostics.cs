@@ -30,6 +30,24 @@ internal static class Diagnostics
         defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor MissingHandler = new(
+        id: "MEDGEN005",
+        title: "Request has no handler",
+        messageFormat: "Request '{0}' has no handler in this project, so sending it fails at runtime; add a handler or suppress MEDGEN005 if it is handled in another project",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    public static readonly DiagnosticDescriptor DuplicateHandlers = new(
+        id: "MEDGEN006",
+        title: "Request has more than one handler",
+        messageFormat: "Request '{0}' has {1} handlers ({2}); only the last one registered is used, so the others never run",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
     public static readonly DiagnosticDescriptor InvalidDeclaredBehavior = new(
         id: "MEDGEN004",
         title: "Invalid pipeline behavior declaration",

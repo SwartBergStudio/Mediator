@@ -70,6 +70,9 @@ namespace Mediator.Tests
                 => throw new InvalidOperationException("sync failure");
         }
 
+        // Intentionally has no handler: the test checks the failure.
+        #pragma warning disable MEDGEN005
         public sealed class RequestWithoutHandler : IRequest<int>;
+        #pragma warning restore MEDGEN005
     }
 }

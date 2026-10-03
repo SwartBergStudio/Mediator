@@ -303,6 +303,18 @@ The generated code registers every handler and pre-creates its strongly-typed di
 | `MEDGEN002` | Warning | A handler (or its message type) is `private`/`protected` and can't be registered. Make it `internal` or `public`. |
 | `MEDGEN003` | Info | An open generic handler or behavior was skipped. List it in `[assembly: MediatorPipelineBehaviors(...)]` or register it explicitly. |
 | `MEDGEN004` | Warning | A type in `[assembly: MediatorPipelineBehaviors(...)]` isn't an open generic pipeline behavior. |
+| `MEDGEN005` | Warning | A request declared in the project has **no handler**, so sending it would fail at runtime. |
+| `MEDGEN006` | Warning | A request has **more than one handler**. Only the last one registered is used; the others never run. |
+
+`MEDGEN005` and `MEDGEN006` are reported by an analyzer included in the generator package. If a request is handled in another project, suppress the warning for that one type:
+
+```csharp
+#pragma warning disable MEDGEN005 // handled in the Billing project
+public sealed record ChargeCard(Guid OrderId) : IRequest<Receipt>;
+#pragma warning restore MEDGEN005
+```
+
+To suppress it for a whole project, use `<NoWarn>$(NoWarn);MEDGEN005</NoWarn>` or `dotnet_diagnostic.MEDGEN005.severity = none` in `.editorconfig`. To fail the build on these instead, set the severity to `error`.
 
 ### Persistence under Native AOT
 
