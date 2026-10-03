@@ -78,3 +78,16 @@ jobs:
           dotnet pack src/Mediator/Mediator.csproj --configuration Release --output ./packages-ci \
             -p:Version=999.0.0-ci -p:AssemblyVersion=999.0.0.0 -p:PackageValidationBaselineVersion=$baseline
         fi
+
+    # A .NET 8 app, built with the .NET 8 SDK, against the packages from this commit. Catches what the latest-SDK
+    # build above can't: a source generator that needs a newer compiler, or library dependencies that force newer
+    # Microsoft.Extensions.* packages onto older apps. See tests-compat/README.md.
+    - name: Consumer compatibility (.NET 8 SDK)
+      run: |
+        dotnet pack src/Mediator/Mediator.csproj --configuration Release --output ./packages-ci \
+          -p:Version=999.0.0-ci -p:AssemblyVersion=999.0.0.0 -p:EnablePackageValidation=false
+        dotnet pack src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj --configuration Release --output ./packages-ci \
+          -p:Version=999.0.0-ci
+        cd tests-compat
+        dotnet --version
+        dotnet run --project Net8Consumer

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Always resolve the freshly packed CI build, never a cached copy. -->
+    <RestoreNoCache>true</RestoreNoCache>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SwartBerg.Mediator" Version="999.0.0-ci" />
+    <PackageReference Include="SwartBerg.Mediator.SourceGenerator" Version="999.0.0-ci" PrivateAssets="all" />
+    <!-- The oldest versions the library supports, as a .NET 8 app would reference them. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>
