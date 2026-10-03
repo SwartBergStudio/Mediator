@@ -2,7 +2,15 @@
 
 All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator. Versions follow [Semantic Versioning](https://semver.org/); release dates and packages are on the [Releases](https://github.com/SwartBergStudio/Mediator/releases) page.
 
-## 3.1.0 (unreleased)
+## 3.1.1
+
+### Fixed
+- **The package README on nuget.org showed the logo oversized and out of place.** The README now uses a plain Markdown image, which renders the same on GitHub and nuget.org. No code changes.
+
+### Changed
+- The source generator is built with `Microsoft.CodeAnalysis.Analyzers` 5.9.0, a build-time code-quality check. It still targets the .NET 8 SDK compiler and adds no dependencies for consumers.
+
+## 3.1.0
 
 ### Added
 - **Tracing and metrics.** Requests, commands, streams and notification handlers report OpenTelemetry-compatible spans and metrics through the `SwartBerg.Mediator` `ActivitySource` and `Meter` (see README → Observability).
