@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Mediator;
 using Mediator.AotSample;
@@ -20,6 +21,16 @@ using (var previousRun = new FileNotificationPersistence(persistenceDirectory))
     await previousRun.PersistAsync(new NotificationWorkItem(
         pending, typeof(ReportGenerated), DateTime.UtcNow, serializer.Serialize(pending, typeof(ReportGenerated))));
 }
+
+// Collect the mediator's spans the way OpenTelemetry would.
+var spans = new System.Collections.Concurrent.ConcurrentQueue<string>();
+using var listener = new ActivityListener
+{
+    ShouldListenTo = source => source.Name == MediatorDiagnostics.ActivitySourceName,
+    Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+    ActivityStopped = activity => spans.Enqueue(activity.DisplayName),
+};
+ActivitySource.AddActivityListener(listener);
 
 var services = new ServiceCollection();
 services.AddLogging(builder => builder.AddSimpleConsole().SetMinimumLevel(LogLevel.Critical));
@@ -87,6 +98,7 @@ using (var provider = services.BuildServiceProvider())
                           && !Directory.EnumerateFiles(persistenceDirectory).Any());
     Check(tracker.Events.Contains("email:42") && tracker.Events.Contains("audit:42"), "notification to two handlers");
     Check(tracker.Events.Contains("report:from-previous-run"), "notification persisted before restart is recovered");
+    Check(spans.Contains("send GetGreeting") && spans.Contains("handle OrderPlaced"), "tracing spans for requests and background handlers");
     Check(!Directory.EnumerateFiles(persistenceDirectory).Any(), "persisted notifications completed and removed");
 }
 
