@@ -2,6 +2,11 @@
 
 All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator. Versions follow [Semantic Versioning](https://semver.org/); release dates and packages are on the [Releases](https://github.com/SwartBergStudio/Mediator/releases) page.
 
+## 3.1.2
+
+### Fixed
+- **Background notification handlers inherited the ExecutionContext of the first request that published.** The publisher's worker, recovery and cleanup loops are started by the first `Publish` call and captured that caller's `AsyncLocal` state for the life of the process. In ASP.NET Core this meant every background handler could see that request's `HttpContext` (through `IHttpContextAccessor`), its logger scopes and `Activity.Current`, whichever request was publishing. The loops now start with a clean context. Handler spans are still linked to the span that published them. Present since before 3.0.
+
 ## 3.1.1
 
 ### Fixed

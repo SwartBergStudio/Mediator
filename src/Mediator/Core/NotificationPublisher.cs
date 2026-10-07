@@ -92,29 +92,35 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
             AllowSynchronousContinuations = false
         });
 
-        _workers = new Task[Math.Max(0, _options.NotificationWorkerCount)];
-        for (var i = 0; i < _workers.Length; i++)
+        // This singleton is created inside the first caller's request (its first Publish). The loops below live for the
+        // life of the process, so they must not capture that request's ExecutionContext; otherwise every background
+        // handler would see its AsyncLocal state (HttpContext, logger scopes, Activity.Current).
+        using (ExecutionContext.SuppressFlow())
         {
-            _workers[i] = Task.Run(ProcessNotificationsAsync, _shutdown.Token);
-        }
-        _logger.LogInformation("Started {WorkerCount} background notification workers", _workers.Length);
-
-        _queueSize = () => _channel.Reader.Count;
-        MediatorTelemetry.RegisterQueue(_queueSize);
-
-        if (_persistence != null)
-        {
-            _maintenanceLoops = new[]
+            _workers = new Task[Math.Max(0, _options.NotificationWorkerCount)];
+            for (var i = 0; i < _workers.Length; i++)
             {
-                Task.Run(() => RunPeriodicAsync(_options.ProcessingInterval, RecoverNotificationsAsync), _shutdown.Token),
-                Task.Run(() => RunPeriodicAsync(_options.CleanupInterval, CleanupAsync), _shutdown.Token),
-            };
-            _logger.LogInformation("Started recovery and cleanup loops with ProcessingInterval={ProcessingInterval}, CleanupInterval={CleanupInterval}",
-                _options.ProcessingInterval, _options.CleanupInterval);
-        }
-        else
-        {
-            _maintenanceLoops = Array.Empty<Task>();
+                _workers[i] = Task.Run(ProcessNotificationsAsync, _shutdown.Token);
+            }
+            _logger.LogInformation("Started {WorkerCount} background notification workers", _workers.Length);
+
+            _queueSize = () => _channel.Reader.Count;
+            MediatorTelemetry.RegisterQueue(_queueSize);
+
+            if (_persistence != null)
+            {
+                _maintenanceLoops = new[]
+                {
+                    Task.Run(() => RunPeriodicAsync(_options.ProcessingInterval, RecoverNotificationsAsync), _shutdown.Token),
+                    Task.Run(() => RunPeriodicAsync(_options.CleanupInterval, CleanupAsync), _shutdown.Token),
+                };
+                _logger.LogInformation("Started recovery and cleanup loops with ProcessingInterval={ProcessingInterval}, CleanupInterval={CleanupInterval}",
+                    _options.ProcessingInterval, _options.CleanupInterval);
+            }
+            else
+            {
+                _maintenanceLoops = Array.Empty<Task>();
+            }
         }
     }
 
