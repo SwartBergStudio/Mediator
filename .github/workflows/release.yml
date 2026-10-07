@@ -63,8 +63,12 @@ jobs:
 
     # The version lives in git tags (vX.Y.Z, created by the GitHub Release step below) and is passed to
     # the build as MSBuild properties; nothing is committed back to main.
+    # The validation baseline package is downloaded by restore (a PackageDownload), so restore must use the same
+    # baseline as the Pack step below; otherwise it fetches the csproj's default and pack cannot find the previous release.
     - name: Restore dependencies
-      run: dotnet restore
+      run: |
+        previous="${{ steps.version.outputs.previous_tag }}"
+        dotnet restore -p:PackageValidationBaselineVersion=${previous#v}
 
     - name: Build
       run: >-
