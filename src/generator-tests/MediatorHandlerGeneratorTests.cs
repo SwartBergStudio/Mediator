@@ -89,7 +89,22 @@ public class MediatorHandlerGeneratorTests
     }
 
     [Fact]
-    public void Open_generic_behavior_reports_MEDGEN003_and_is_skipped()
+    public void Open_generic_handler_reports_MEDGEN003_and_is_skipped()
+    {
+        var (_, diagnostics, generated) = Run(Messages + """
+
+            public sealed class AuditAll<TNotification> : INotificationHandler<TNotification> where TNotification : INotification
+            {
+                public Task Handle(TNotification notification, CancellationToken cancellationToken) => Task.CompletedTask;
+            }
+            """);
+
+        diagnostics.Should().ContainSingle(d => d.Id == "MEDGEN003");
+        generated.Should().NotContain("AuditAll");
+    }
+
+    [Fact]
+    public void Unlisted_open_generic_stream_behavior_reports_MEDGEN007_and_is_skipped()
     {
         var (_, diagnostics, generated) = Run(Messages + """
 
@@ -100,7 +115,7 @@ public class MediatorHandlerGeneratorTests
             }
             """);
 
-        diagnostics.Should().ContainSingle(d => d.Id == "MEDGEN003");
+        diagnostics.Should().ContainSingle(d => d.Id == "MEDGEN007");
         generated.Should().NotContain("Logging");
     }
 
@@ -204,6 +219,84 @@ public class MediatorHandlerGeneratorTests
         // Command behaviors apply to IRequest only; request behaviors apply to IRequest<T> only.
         Registered(generated, "global::Mediator.IPipelineBehavior<global::App.Save>").Should().Equal("global::App.CommandLog<global::App.Save>");
         Registered(generated, "global::Mediator.IPipelineBehavior<global::App.Ping, string>").Should().Equal("global::App.Outer<global::App.Ping, string>");
+    }
+
+    [Fact]
+    public void Declared_closed_behaviors_are_registered_in_declared_order_between_open_ones()
+    {
+        var (output, diagnostics, generated) = Run(WithAssemblyAttribute(
+            "[assembly: Mediator.MediatorPipelineBehaviors(typeof(App.Outer<,>), typeof(App.PingCache), typeof(App.SaveAudit), typeof(App.StreamLog<,>), typeof(App.Doubler), typeof(App.Inner<,>))]") + """
+
+            public sealed record Save(string Name) : IRequest;
+            public sealed class SaveHandler : IRequestHandler<Save>
+            {
+                public Task Handle(Save request, CancellationToken cancellationToken) => Task.CompletedTask;
+            }
+            public sealed record Count : IStreamRequest<int>;
+            public sealed class CountHandler : IStreamRequestHandler<Count, int>
+            {
+                public async IAsyncEnumerable<int> Handle(Count request, CancellationToken cancellationToken) { yield return 1; await Task.Yield(); }
+            }
+            public sealed class Outer<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse>
+            {
+                public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class Inner<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse>
+            {
+                public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class PingCache : IPipelineBehavior<Ping, string>
+            {
+                public Task<string> Handle(Ping request, RequestHandlerDelegate<string> next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class SaveAudit : IPipelineBehavior<Save>
+            {
+                public Task Handle(Save request, RequestHandlerDelegate next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class StreamLog<TRequest, TResponse> : IStreamPipelineBehavior<TRequest, TResponse> where TRequest : IStreamRequest<TResponse>
+            {
+                public IAsyncEnumerable<TResponse> Handle(TRequest request, StreamHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+            }
+            public sealed class Doubler : IStreamPipelineBehavior<Count, int>
+            {
+                public IAsyncEnumerable<int> Handle(Count request, StreamHandlerDelegate<int> next, CancellationToken cancellationToken) => next();
+            }
+            """);
+
+        diagnostics.Should().BeEmpty("a listed closed stream behavior is not reported as automatically registered");
+        output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
+
+        Registered(generated, "global::Mediator.IPipelineBehavior<global::App.Ping, string>").Should().Equal(
+            "global::App.Outer<global::App.Ping, string>",
+            "global::App.PingCache",
+            "global::App.Inner<global::App.Ping, string>");
+        Registered(generated, "global::Mediator.IPipelineBehavior<global::App.Save>").Should().Equal("global::App.SaveAudit");
+        Registered(generated, "global::Mediator.IStreamPipelineBehavior<global::App.Count, int>").Should().Equal(
+            "global::App.StreamLog<global::App.Count, int>",
+            "global::App.Doubler");
+    }
+
+    [Fact]
+    public void Unlisted_closed_stream_behavior_is_not_registered_and_reports_MEDGEN007()
+    {
+        var (output, diagnostics, generated) = Run(Messages + """
+
+            public sealed record Count : IStreamRequest<int>;
+            public sealed class CountHandler : IStreamRequestHandler<Count, int>
+            {
+                public async IAsyncEnumerable<int> Handle(Count request, CancellationToken cancellationToken) { yield return 1; await Task.Yield(); }
+            }
+            public sealed class Doubler : IStreamPipelineBehavior<Count, int>
+            {
+                public IAsyncEnumerable<int> Handle(Count request, StreamHandlerDelegate<int> next, CancellationToken cancellationToken) => next();
+            }
+            """);
+
+        output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
+        diagnostics.Should().ContainSingle(d => d.Id == "MEDGEN007" && d.Severity == DiagnosticSeverity.Info)
+            .Which.GetMessage().Should().Contain("Doubler");
+        Registered(generated, "global::Mediator.IStreamPipelineBehavior<global::App.Count, int>")
+            .Should().BeEmpty("since 4.0 behaviors are registered only when listed in the attribute (or by the app)");
     }
 
     [Fact]

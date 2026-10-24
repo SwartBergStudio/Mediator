@@ -34,13 +34,18 @@ internal static class HandlerWrapperCache
     }
 
     public static CommandHandlerWrapper GetCommandWrapper(Type requestType)
+        => FindCommandWrapper(requestType) ?? throw MissingWrapper(requestType);
+
+    /// <summary>
+    /// Returns the wrapper for a command type, or <c>null</c> when none is registered and one cannot be created (Native AOT).
+    /// </summary>
+    public static CommandHandlerWrapper? FindCommandWrapper(Type requestType)
     {
         if (s_commandWrappers.TryGetValue(requestType, out var wrapper))
             return wrapper;
 
-        return s_commandWrappers.GetOrAdd(requestType, static t =>
-            CreateWrapper<CommandHandlerWrapper>(typeof(CommandHandlerWrapper<>), t)
-            ?? throw MissingWrapper(t));
+        var created = CreateWrapper<CommandHandlerWrapper>(typeof(CommandHandlerWrapper<>), requestType);
+        return created is null ? null : s_commandWrappers.GetOrAdd(requestType, created);
     }
 
     /// <summary>

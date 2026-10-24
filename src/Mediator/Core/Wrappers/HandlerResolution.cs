@@ -21,5 +21,16 @@ internal static class HandlerResolution
     }
 
     public static InvalidOperationException NotFound(Type handlerType)
-        => new($"Handler not found: {handlerType.Name}");
+        => new($"Handler not found: {DisplayName(handlerType)}");
+
+    /// <summary>C#-style name, e.g. <c>IRequestHandler&lt;CreateOrder, Guid&gt;</c> rather than <c>IRequestHandler`2</c>.</summary>
+    private static string DisplayName(Type type)
+    {
+        if (!type.IsGenericType)
+            return type.Name;
+
+        var name = type.Name;
+        var tick = name.IndexOf('`');
+        return $"{(tick < 0 ? name : name.Substring(0, tick))}<{string.Join(", ", Array.ConvertAll(type.GetGenericArguments(), DisplayName))}>";
+    }
 }

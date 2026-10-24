@@ -106,6 +106,17 @@ namespace Mediator.Tests
         }
 
         [Fact]
+        public void Serialize_WhenTheNotificationCannotBeSerialized_ShouldThrow()
+        {
+            // It used to return "{}", which was persisted and later deserialized as a notification with every
+            // property at its default value, so a retry ran the handler on blank data.
+            var notification = new CyclicNotification { Message = "Hello" };
+            notification.Self = notification;
+
+            _serializer.Invoking(s => s.Serialize(notification, typeof(CyclicNotification))).Should().Throw<System.Text.Json.JsonException>();
+        }
+
+        [Fact]
         public void Deserialize_WithInvalidJson_ShouldReturnNull()
         {
             // Arrange
@@ -157,6 +168,12 @@ namespace Mediator.Tests
         public DateTime CreatedAt { get; set; }
         public string[] Tags { get; set; } = Array.Empty<string>();
         public System.Collections.Generic.Dictionary<string, object> Metadata { get; set; } = new();
+    }
+
+    public class CyclicNotification : INotification
+    {
+        public string Message { get; set; } = string.Empty;
+        public CyclicNotification? Self { get; set; }
     }
 
     public class BaseNotification : INotification

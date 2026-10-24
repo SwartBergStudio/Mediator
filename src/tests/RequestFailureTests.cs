@@ -31,6 +31,18 @@ namespace Mediator.Tests
         }
 
         [Fact]
+        public async Task SendCommand_NullRequest_ShouldReturnFaultedTaskWithoutCallingTheHandler()
+        {
+            // The generic overload is chosen for a statically typed command; it used to pass null on to the handler.
+            using var provider = Build();
+
+            await provider.GetRequiredService<IMediator>().Invoking(m => m.Send<ThrowingSyncCommand>(null!))
+                .Should().ThrowAsync<ArgumentNullException>();
+            await provider.GetRequiredService<ICommandDispatcher>().Invoking(d => d.Send<ThrowingSyncCommand>(null!))
+                .Should().ThrowAsync<ArgumentNullException>();
+        }
+
+        [Fact]
         public async Task Send_MissingHandler_ShouldReturnFaultedTaskInsteadOfThrowing()
         {
             using var provider = Build();

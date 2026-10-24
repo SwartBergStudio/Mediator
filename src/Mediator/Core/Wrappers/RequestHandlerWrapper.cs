@@ -19,9 +19,15 @@ internal sealed class RequestHandlerWrapper<TRequest, TResponse> : RequestHandle
             ?? throw HandlerResolution.NotFound(typeof(IRequestHandler<TRequest, TResponse>));
 
         var behaviors = HandlerResolution.ResolveAll<IPipelineBehavior<TRequest, TResponse>>(serviceProvider);
-        if (behaviors.Length == 0)
-            return handler.Handle(typedRequest, cancellationToken);
+        return behaviors.Length == 0
+            ? handler.Handle(typedRequest, cancellationToken)
+            : InvokePipeline(handler, behaviors, typedRequest, cancellationToken);
+    }
 
+    // Separate method on purpose: the lambdas capture the parameters, and C# allocates that closure on entry to the
+    // method declaring them, so in Handle it would cost an allocation on every call, even without behaviors.
+    private static Task<TResponse> InvokePipeline(IRequestHandler<TRequest, TResponse> handler, IPipelineBehavior<TRequest, TResponse>[] behaviors, TRequest typedRequest, CancellationToken cancellationToken)
+    {
         RequestHandlerDelegate<TResponse> next = () => handler.Handle(typedRequest, cancellationToken);
         for (var i = behaviors.Length - 1; i >= 0; i--)
         {

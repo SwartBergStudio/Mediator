@@ -14,7 +14,6 @@ internal enum HandlerKind
     Command,
     Notification,
     StreamRequest,
-    StreamBehavior,
     DeclaredBehavior,
 }
 
@@ -48,7 +47,7 @@ internal sealed record DiagnosticInfo(DiagnosticDescriptor Descriptor, LocationI
 
 internal sealed record HandlerClassResult(EquatableArray<HandlerRegistration> Registrations, DiagnosticInfo? Diagnostic);
 
-internal sealed record GeneratorSettings(string Namespace, bool MediatorReferenced, EquatableArray<DiagnosticInfo> Diagnostics);
+internal sealed record GeneratorSettings(string Namespace, bool MediatorReferenced, EquatableArray<DiagnosticInfo> Diagnostics, EquatableArray<HandlerRegistration> ClosedBehaviors);
 
 /// <summary>
 /// Immutable array with value equality, required for incremental generator caching.

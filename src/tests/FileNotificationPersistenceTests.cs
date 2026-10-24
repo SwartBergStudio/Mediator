@@ -201,6 +201,58 @@ namespace Mediator.Tests
             Assert.True(pendingItems.Count() <= 3);
         }
 
+        [Fact]
+        public async Task FailAsync_WhenTheFileCannotBeAccessed_ShouldKeepTheNotificationAndReportTheError()
+        {
+            // An IO error while recording the retry (another process holding the file, such as a virus scanner) used to
+            // delete the notification and report success, so it was never handled again.
+            var notification = new TestNotification { Message = "Test message" };
+            var id = await _persistence.PersistAsync(new NotificationWorkItem(notification, typeof(TestNotification), DateTime.UtcNow,
+                _serializer.Serialize(notification, typeof(TestNotification))));
+            var filePath = Path.Combine(_testDirectory, $"{id}.json");
+            var before = await File.ReadAllTextAsync(filePath);
+
+            using (new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Delete))
+            {
+                await _persistence.Invoking(p => p.FailAsync(id, new InvalidOperationException("handler failed"), DateTime.UtcNow.AddMinutes(1)))
+                    .Should().ThrowAsync<IOException>();
+            }
+
+            File.Exists(filePath).Should().BeTrue("the notification must still be handled later");
+            (await File.ReadAllTextAsync(filePath)).Should().Be(before);
+            (await _persistence.GetPendingAsync()).Should().ContainSingle(p => p.Id == id);
+        }
+
+        [Fact]
+        public async Task CleanupAsync_ShouldRemoveOldTemporaryFilesLeftByAnInterruptedWrite()
+        {
+            var orphan = Path.Combine(_testDirectory, "abc.json.tmp");
+            await File.WriteAllTextAsync(orphan, "{\"id\":");
+            File.SetCreationTimeUtc(orphan, DateTime.UtcNow.AddDays(-2));
+
+            await _persistence.CleanupAsync(DateTime.UtcNow.AddDays(-1));
+
+            File.Exists(orphan).Should().BeFalse("only *.json was cleaned, so these accumulated forever");
+        }
+
+        [Theory]
+        [InlineData("{\"id\":\"bad\",\"workItem\":\"not an object\"}")]
+        [InlineData("{\"id\":\"bad\",\"createdAt\":null,\"workItem\":{\"assemblyQualifiedName\":\"System.String\",\"serializedNotification\":\"x\",\"createdAt\":null}}")]
+        [InlineData("{\"id\":\"bad\",\"attemptCount\":1e30,\"workItem\":{\"assemblyQualifiedName\":\"System.String\",\"serializedNotification\":\"x\"}}")]
+        public async Task GetPendingAsync_WithAFileOfTheWrongShape_ShouldStillReturnTheOtherItems(string content)
+        {
+            // Valid JSON of the wrong shape used to throw out of GetPendingAsync, so one bad file stopped recovery of
+            // every other notification on every pass.
+            var notification = new TestNotification { Message = "Test message" };
+            var id = await _persistence.PersistAsync(new NotificationWorkItem(notification, typeof(TestNotification), DateTime.UtcNow,
+                _serializer.Serialize(notification, typeof(TestNotification))));
+            await File.WriteAllTextAsync(Path.Combine(_testDirectory, "bad.json"), content);
+
+            var pending = (await _persistence.GetPendingAsync()).ToList();
+
+            pending.Should().ContainSingle().Which.Id.Should().Be(id);
+        }
+
         public void Dispose()
         {
             if (Directory.Exists(_testDirectory))

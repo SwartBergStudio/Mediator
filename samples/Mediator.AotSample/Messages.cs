@@ -2,7 +2,11 @@ using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using Mediator;
 
-[assembly: MediatorPipelineBehaviors(typeof(Mediator.AotSample.CountingBehavior<,>), typeof(Mediator.AotSample.AuditCommands<>))]
+// Behaviors in execution order. Open generic ones are closed per request; closed ones (DoubleNumbers) apply to their own request.
+[assembly: MediatorPipelineBehaviors(
+    typeof(Mediator.AotSample.CountingBehavior<,>),
+    typeof(Mediator.AotSample.AuditCommands<>),
+    typeof(Mediator.AotSample.DoubleNumbers))]
 
 namespace Mediator.AotSample;
 
@@ -132,7 +136,7 @@ public sealed class UpdateInvoiceReadModel(Tracker tracker, UserSession session)
     }
 }
 
-/// <summary>Closed stream behavior: discovered and registered by the source generator.</summary>
+/// <summary>Closed stream behavior, listed in [assembly: MediatorPipelineBehaviors] so its position is defined.</summary>
 public sealed class DoubleNumbers : IStreamPipelineBehavior<CountTo, int>
 {
     public async IAsyncEnumerable<int> Handle(CountTo request, StreamHandlerDelegate<int> next, [EnumeratorCancellation] CancellationToken cancellationToken)

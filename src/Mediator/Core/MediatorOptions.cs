@@ -57,6 +57,14 @@ namespace Mediator.Core
         public TimeSpan CleanupInterval { get; set; } = TimeSpan.FromHours(6);
 
         /// <summary>
+        /// How long shutdown waits for background notifications that are already queued or running to finish, before
+        /// cancelling the handlers' token. Notifications not finished by then are kept in storage when persistence is
+        /// enabled, and recovered on the next start; without persistence they are lost (logged as a warning).
+        /// <see cref="Timeout.InfiniteTimeSpan"/> waits until they have all finished.
+        /// </summary>
+        public TimeSpan ShutdownTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+        /// <summary>
         /// Global setting to use ConfigureAwait(false) for the mediator's own awaits (notification publishing and
         /// persistence). Requests, commands and streams are not awaited by the mediator at all, so your code's own
         /// await (with or without ConfigureAwait) decides where its continuation runs.

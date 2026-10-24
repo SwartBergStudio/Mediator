@@ -72,6 +72,55 @@ namespace Mediator.Tests
         }
 
         [Fact]
+        public async Task NotificationThatCannotBeSerialized_ShouldNeverReachAHandlerAsABlankCopy()
+        {
+            // The serializer used to return "{}" for it. That was persisted, and the retry deserialized it as a
+            // notification with every property at its default, so the handler ran again on blank data.
+            var calls = new RetryProbe();
+            calls.FailuresLeft["Cyclic"] = 1;
+            using var provider = Build(calls, maxRetryAttempts: 3, atomicRetryStore: true);
+            var notification = new CyclicOrder { OrderId = "42" };
+            notification.Self = notification;
+
+            await provider.GetRequiredService<IMediator>().Publish(notification);
+            await Eventually.WaitUntilAsync(() => calls.Count("Cyclic") >= 2, TimeSpan.FromSeconds(1));
+
+            calls.Received.Should().OnlyContain(id => id == "42", "a handler must only ever see the published data. Log:\n{0}", Log);
+            calls.Count("Cyclic").Should().Be(1, "a notification that cannot be persisted is handled in memory only, without retries");
+            _log.Should().Contain(line => line.Contains("Failed to persist notification"));
+        }
+
+        [Fact]
+        public async Task RetryDelayBeyondTheCalendar_ShouldScheduleTheRetryInsteadOfRerunningAtOnce()
+        {
+            // The retry time overflowed DateTime and threw, so the retry was never recorded: the stored item stayed
+            // ready and every recovery pass ran all its handlers again, with no backoff and no attempt limit.
+            var calls = new RetryProbe();
+            calls.FailuresLeft["Flaky"] = int.MaxValue;
+            using var provider = Build(calls, maxRetryAttempts: 3, atomicRetryStore: true, initialRetryDelay: TimeSpan.FromDays(365.0 * 20_000));
+
+            await provider.GetRequiredService<IMediator>().Publish(new OrderPlaced());
+            await Eventually.WaitUntilAsync(() => calls.Count("Flaky") == 1 && PersistedFiles().Length == 1);
+            await Task.Delay(500); // ten recovery passes
+
+            calls.Count("Flaky").Should().Be(1, "its retry is scheduled (at the latest representable time). Log:\n{0}", Log);
+            calls.Count("Stable").Should().Be(1, "it succeeded and must not run again. Log:\n{0}", Log);
+            PersistedFiles().Should().ContainSingle("the retry item for the failed handler is kept");
+        }
+
+        [Fact]
+        public async Task UnboundedMaxRetryAttempts_ShouldNotPreventTheMediatorFromStarting()
+        {
+            var calls = new RetryProbe();
+            using var provider = Build(calls, maxRetryAttempts: int.MaxValue, atomicRetryStore: true);
+
+            await provider.GetRequiredService<IMediator>().Publish(new OrderPlaced());
+            await Eventually.WaitUntilAsync(() => calls.Count("Stable") == 1);
+
+            calls.Count("Stable").Should().Be(1, "Log:\n{0}", Log);
+        }
+
+        [Fact]
         public async Task TargetHandlerType_ShouldRoundTripThroughFilePersistence()
         {
             using var persistence = new FileNotificationPersistence(_directory);
@@ -95,7 +144,7 @@ namespace Mediator.Tests
         /// True: the file store, which implements INotificationRetryPersistence. False: the same store exposed only as
         /// INotificationPersistence, like an older custom implementation, to cover the fallback path.
         /// </param>
-        private ServiceProvider Build(RetryProbe calls, int maxRetryAttempts, bool atomicRetryStore)
+        private ServiceProvider Build(RetryProbe calls, int maxRetryAttempts, bool atomicRetryStore, TimeSpan? initialRetryDelay = null)
         {
             var services = new ServiceCollection();
             services.AddLogging(builder => builder.AddProvider(new QueueLoggerProvider(_log)).SetMinimumLevel(LogLevel.Debug));
@@ -103,6 +152,7 @@ namespace Mediator.Tests
             services.AddTransient<INotificationHandler<OrderPlaced>, StableHandler>();
             services.AddTransient<INotificationHandler<OrderPlaced>, FlakyHandler>();
             services.AddTransient<INotificationHandler<OrderPlaced>, OtherHandler>();
+            services.AddTransient<INotificationHandler<CyclicOrder>, CyclicOrderHandler>();
             services.AddSingleton<INotificationPersistence>(_ => atomicRetryStore
                 ? new FileNotificationPersistence(_directory)
                 : new BasicPersistence(new FileNotificationPersistence(_directory)));
@@ -112,7 +162,7 @@ namespace Mediator.Tests
                 options.NotificationWorkerCount = 1;
                 options.ProcessingInterval = TimeSpan.FromMilliseconds(50);
                 options.MaxRetryAttempts = maxRetryAttempts;
-                options.InitialRetryDelay = TimeSpan.FromMilliseconds(20);
+                options.InitialRetryDelay = initialRetryDelay ?? TimeSpan.FromMilliseconds(20);
                 options.RetryDelayMultiplier = 1.0;
             });
             return services.BuildServiceProvider();
@@ -148,6 +198,8 @@ namespace Mediator.Tests
             private readonly ConcurrentDictionary<string, int> _calls = new();
             public ConcurrentDictionary<string, int> FailuresLeft { get; } = new();
 
+            public ConcurrentQueue<string> Received { get; } = new();
+
             public int Count(string handler) => _calls.TryGetValue(handler, out var c) ? c : 0;
 
             public Task Run(string handler)
@@ -181,6 +233,22 @@ namespace Mediator.Tests
         public sealed class OtherHandler(RetryProbe calls) : INotificationHandler<OrderPlaced>
         {
             public Task Handle(OrderPlaced notification, CancellationToken cancellationToken) => calls.Run("Other");
+        }
+
+        /// <summary>Refers to itself, so JSON serialization fails with an object cycle.</summary>
+        public sealed class CyclicOrder : INotification
+        {
+            public string OrderId { get; set; } = string.Empty;
+            public CyclicOrder? Self { get; set; }
+        }
+
+        public sealed class CyclicOrderHandler(RetryProbe calls) : INotificationHandler<CyclicOrder>
+        {
+            public Task Handle(CyclicOrder notification, CancellationToken cancellationToken)
+            {
+                calls.Received.Enqueue(notification.OrderId);
+                return calls.Run("Cyclic");
+            }
         }
     }
 }

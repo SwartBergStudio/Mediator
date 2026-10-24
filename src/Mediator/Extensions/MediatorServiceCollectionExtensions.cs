@@ -59,6 +59,8 @@ public static class MediatorServiceCollectionExtensions
         services.TryAddTransient<IRequestDispatcher, RequestDispatcher>();
         services.TryAddTransient<ICommandDispatcher, CommandDispatcher>();
         services.TryAddSingleton<INotificationPublisher, NotificationPublisher>();
+        // Starts the publisher with the host (recovering stored notifications) and drains it on shutdown.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<Microsoft.Extensions.Hosting.IHostedService, NotificationPublisherLifetime>());
         services.TryAddTransient<IStreamRequestDispatcher, StreamRequestDispatcher>();
         services.TryAddTransient<IMediator, Core.Mediator>();
 

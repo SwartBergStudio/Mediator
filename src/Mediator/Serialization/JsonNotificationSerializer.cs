@@ -88,29 +88,26 @@ namespace Mediator.Serialization
         }
 
         /// <inheritdoc />
+        /// <remarks>
+        /// Throws when the notification cannot be serialized (for example an object cycle, or a type missing from a
+        /// source-generated context). The mediator then logs the error and handles the notification in memory only.
+        /// </remarks>
         public string Serialize(object? notification, Type notificationType)
         {
             if (notification is null)
                 return "null";
 
-            try
+            var concreteType = notification.GetType();
+            var buffer = new ArrayBufferWriter<byte>(_options.DefaultBufferSize);
+            using (var writer = new Utf8JsonWriter(buffer))
             {
-                var concreteType = notification.GetType();
-                var buffer = new ArrayBufferWriter<byte>(_options.DefaultBufferSize);
-                using (var writer = new Utf8JsonWriter(buffer))
-                {
-                    writer.WriteStartObject();
-                    writer.WriteString(TypePropertyName, concreteType.AssemblyQualifiedName);
-                    writer.WritePropertyName(DataPropertyName);
-                    JsonSerializer.Serialize(writer, notification, _options.GetTypeInfo(concreteType));
-                    writer.WriteEndObject();
-                }
-                return System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
+                writer.WriteStartObject();
+                writer.WriteString(TypePropertyName, concreteType.AssemblyQualifiedName);
+                writer.WritePropertyName(DataPropertyName);
+                JsonSerializer.Serialize(writer, notification, _options.GetTypeInfo(concreteType));
+                writer.WriteEndObject();
             }
-            catch
-            {
-                return "{}";
-            }
+            return System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
         }
     }
 }

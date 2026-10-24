@@ -7,13 +7,18 @@ using Microsoft.CodeAnalysis;
 namespace Mediator.SourceGenerator;
 
 /// <summary>
-/// An open generic behavior listed in <c>[assembly: MediatorPipelineBehaviors(...)]</c>.
+/// A behavior listed in <c>[assembly: MediatorPipelineBehaviors(...)]</c>: open generic, closed per request by
+/// <see cref="BehaviorDeclarations.TryClose"/>, or closed, registered for the behavior interfaces it implements.
 /// </summary>
-/// <param name="Type">The open generic behavior type.</param>
-/// <param name="TargetKind">Request (IPipelineBehavior&lt;,&gt;), Command (IPipelineBehavior&lt;&gt;) or StreamRequest (IStreamPipelineBehavior&lt;,&gt;).</param>
-/// <param name="Positions">For each of the behavior's type parameters, its position in the behavior interface.</param>
+/// <param name="Type">The behavior type (the open definition for an open generic behavior).</param>
+/// <param name="TargetKind">Open generic only: Request (IPipelineBehavior&lt;,&gt;), Command (IPipelineBehavior&lt;&gt;) or StreamRequest (IStreamPipelineBehavior&lt;,&gt;).</param>
+/// <param name="Positions">Open generic only: for each of the behavior's type parameters, its position in the behavior interface.</param>
 /// <param name="Order">Position in the attribute: the execution order.</param>
-internal sealed record BehaviorDeclaration(INamedTypeSymbol Type, HandlerKind TargetKind, ImmutableArray<int> Positions, int Order);
+/// <param name="ClosedInterfaces">Closed only: the behavior interfaces it implements, each registered as a service.</param>
+internal sealed record BehaviorDeclaration(INamedTypeSymbol Type, HandlerKind TargetKind, ImmutableArray<int> Positions, int Order, ImmutableArray<INamedTypeSymbol> ClosedInterfaces)
+{
+    public bool IsClosed => !ClosedInterfaces.IsDefaultOrEmpty;
+}
 
 /// <summary>
 /// Reads and validates <c>MediatorPipelineBehaviorsAttribute</c> and closes declared behaviors over request types,
@@ -77,21 +82,26 @@ internal static class BehaviorDeclarations
     {
         declaration = null!;
         var definition = type.OriginalDefinition;
-        if (definition.IsAbstract || definition.TypeParameters.Length == 0 || definition.ContainingType is { IsGenericType: true })
+        if (definition.IsAbstract || definition.TypeKind != TypeKind.Class)
+            return false;
+
+        if (!MediatorHandlerGenerator.IsOpenGeneric(definition))
+        {
+            var closedInterfaces = definition.AllInterfaces.Where(i => BehaviorKind(i) is not null).ToImmutableArray();
+            if (closedInterfaces.IsEmpty)
+                return false;
+
+            declaration = new BehaviorDeclaration(definition, HandlerKind.DeclaredBehavior, ImmutableArray<int>.Empty, order, closedInterfaces);
+            return true;
+        }
+
+        if (definition.ContainingType is { IsGenericType: true })
             return false;
 
         foreach (var candidate in definition.AllInterfaces)
         {
-            var kind = candidate.OriginalDefinition.MetadataName switch
-            {
-                "IPipelineBehavior`2" => HandlerKind.Request,
-                "IPipelineBehavior`1" => HandlerKind.Command,
-                "IStreamPipelineBehavior`2" => HandlerKind.StreamRequest,
-                _ => (HandlerKind?)null,
-            };
-            if (kind is null ||
-                candidate.OriginalDefinition.ContainingNamespace?.ToDisplayString() != "Mediator" ||
-                candidate.TypeArguments.Length != definition.TypeParameters.Length)
+            var kind = BehaviorKind(candidate);
+            if (kind is null || candidate.TypeArguments.Length != definition.TypeParameters.Length)
                 continue;
 
             var positions = definition.TypeParameters
@@ -100,11 +110,26 @@ internal static class BehaviorDeclarations
             if (positions.Any(p => p < 0))
                 continue;
 
-            declaration = new BehaviorDeclaration(definition, kind.Value, positions, order);
+            declaration = new BehaviorDeclaration(definition, kind.Value, positions, order, ImmutableArray<INamedTypeSymbol>.Empty);
             return true;
         }
 
         return false;
+    }
+
+    /// <summary>The request kind a Mediator behavior interface applies to, or null when it is not one.</summary>
+    private static HandlerKind? BehaviorKind(INamedTypeSymbol candidate)
+    {
+        if (candidate.OriginalDefinition.ContainingNamespace?.ToDisplayString() != "Mediator")
+            return null;
+
+        return candidate.OriginalDefinition.MetadataName switch
+        {
+            "IPipelineBehavior`2" => HandlerKind.Request,
+            "IPipelineBehavior`1" => HandlerKind.Command,
+            "IStreamPipelineBehavior`2" => HandlerKind.StreamRequest,
+            _ => null,
+        };
     }
 
     /// <summary>

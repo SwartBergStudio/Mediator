@@ -17,8 +17,9 @@ namespace Mediator.SourceGenerator;
 /// </summary>
 /// <remarks>
 /// Discovery mirrors <c>AddMediator(assemblies)</c>: non-abstract, closed classes implementing
-/// IRequestHandler&lt;,&gt;, IRequestHandler&lt;&gt;, INotificationHandler&lt;&gt;, IStreamRequestHandler&lt;,&gt;
-/// or IStreamPipelineBehavior&lt;,&gt; are registered as transient services.
+/// IRequestHandler&lt;,&gt;, IRequestHandler&lt;&gt;, INotificationHandler&lt;&gt; or IStreamRequestHandler&lt;,&gt; are
+/// registered as transient services. Behaviors are not discovered: those listed in
+/// <c>[assembly: MediatorPipelineBehaviors(...)]</c>, open or closed, are registered after the handlers in the listed order.
 /// </remarks>
 [Generator(LanguageNames.CSharp)]
 public sealed class MediatorHandlerGenerator : IIncrementalGenerator
@@ -33,7 +34,6 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
         ["IRequestHandler`1"] = HandlerKind.Command,
         ["INotificationHandler`1"] = HandlerKind.Notification,
         ["IStreamRequestHandler`2"] = HandlerKind.StreamRequest,
-        ["IStreamPipelineBehavior`2"] = HandlerKind.StreamBehavior,
     };
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
@@ -49,12 +49,44 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
 
         var settings = context.CompilationProvider
             .Combine(context.AnalyzerConfigOptionsProvider)
-            .Select(static (pair, _) => new GeneratorSettings(
-                GetNamespace(pair.Left, pair.Right.GlobalOptions),
-                pair.Left.GetTypeByMetadataName("Mediator.MediatorRegistry") is not null,
-                new EquatableArray<DiagnosticInfo>(BehaviorDeclarations.Read(pair.Left).Diagnostics)));
+            .Select(static (pair, _) => CreateSettings(pair.Left, pair.Right.GlobalOptions));
 
         context.RegisterSourceOutput(handlerClasses.Combine(settings), static (spc, input) => Execute(spc, input.Left, input.Right));
+    }
+
+    private static GeneratorSettings CreateSettings(Compilation compilation, AnalyzerConfigOptions options)
+    {
+        var behaviors = BehaviorDeclarations.Read(compilation);
+        var diagnostics = behaviors.Diagnostics.ToBuilder();
+        var closedBehaviors = ImmutableArray.CreateBuilder<HandlerRegistration>();
+
+        // Closed behaviors listed in the attribute are registered once, for the behavior interfaces they implement.
+        foreach (var declaration in behaviors.Declarations.Where(d => d.IsClosed))
+        {
+            if (!IsAccessible(declaration.Type) || declaration.ClosedInterfaces.Any(i => !IsAccessible(i)))
+            {
+                diagnostics.Add(new DiagnosticInfo(Diagnostics.InaccessibleHandler, LocationInfo.From(declaration.Type.Locations.FirstOrDefault()),
+                    declaration.Type.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat)));
+                continue;
+            }
+
+            foreach (var behaviorInterface in declaration.ClosedInterfaces)
+            {
+                closedBehaviors.Add(new HandlerRegistration(
+                    HandlerKind.DeclaredBehavior,
+                    FullName(behaviorInterface),
+                    FullName(declaration.Type),
+                    FullName(behaviorInterface.TypeArguments[0]),
+                    behaviorInterface.TypeArguments.Length > 1 ? FullName(behaviorInterface.TypeArguments[1]) : null,
+                    declaration.Order));
+            }
+        }
+
+        return new GeneratorSettings(
+            GetNamespace(compilation, options),
+            compilation.GetTypeByMetadataName("Mediator.MediatorRegistry") is not null,
+            new EquatableArray<DiagnosticInfo>(diagnostics.ToImmutable()),
+            new EquatableArray<HandlerRegistration>(closedBehaviors.ToImmutable()));
     }
 
     private static HandlerClassResult? Analyze(GeneratorSyntaxContext context, CancellationToken cancellationToken)
@@ -69,12 +101,18 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
         if (type.IsAbstract || type.IsStatic || type.TypeKind != TypeKind.Class)
             return null;
 
-        var handlerInterfaces = type.AllInterfaces.Where(IsHandlerInterface).ToList();
-        if (handlerInterfaces.Count == 0)
-            return null;
-
         var location = LocationInfo.From(type.Locations.FirstOrDefault());
         var display = type.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat);
+
+        // Stream behaviors were discovered by scanning before 4.0; now, like request behaviors, they must be listed in
+        // the attribute or registered explicitly. MEDGEN007 points out the ones that aren't listed.
+        var unlistedStreamBehavior = IsUnlistedStreamBehavior(type, context.SemanticModel.Compilation)
+            ? new DiagnosticInfo(Diagnostics.UndeclaredStreamBehavior, location, display)
+            : null;
+
+        var handlerInterfaces = type.AllInterfaces.Where(IsHandlerInterface).ToList();
+        if (handlerInterfaces.Count == 0)
+            return unlistedStreamBehavior is null ? null : new HandlerClassResult(default, unlistedStreamBehavior);
 
         if (IsOpenGeneric(type))
         {
@@ -101,10 +139,10 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
                 FullName(handlerInterface.TypeArguments[0]),
                 handlerInterface.TypeArguments.Length > 1 ? FullName(handlerInterface.TypeArguments[1]) : null));
 
-            // Close behaviors declared with [assembly: MediatorPipelineBehaviors(...)] over this request.
+            // Close open behaviors declared with [assembly: MediatorPipelineBehaviors(...)] over this request.
             foreach (var declaration in declaredBehaviors)
             {
-                if (declaration.TargetKind != kind) continue;
+                if (declaration.IsClosed || declaration.TargetKind != kind) continue;
 
                 var closed = BehaviorDeclarations.TryClose(declaration, handlerInterface.TypeArguments, context.SemanticModel.Compilation);
                 if (closed is null || !IsAccessible(closed)) continue;
@@ -121,7 +159,7 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
             }
         }
 
-        return new HandlerClassResult(new EquatableArray<HandlerRegistration>(registrations.ToImmutable()), null);
+        return new HandlerClassResult(new EquatableArray<HandlerRegistration>(registrations.ToImmutable()), unlistedStreamBehavior);
     }
 
     private static void Execute(SourceProductionContext context, ImmutableArray<HandlerClassResult> results, GeneratorSettings settings)
@@ -145,7 +183,7 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
 
         // Handlers first (sorted for deterministic output), then declared behaviors in declaration order:
         // the DI container returns IEnumerable<IPipelineBehavior<,>> in registration order.
-        var all = results.SelectMany(r => r.Registrations).Distinct().ToList();
+        var all = results.SelectMany(r => r.Registrations).Concat(settings.ClosedBehaviors).Distinct().ToList();
         var registrations = all
             .Where(r => r.Kind != HandlerKind.DeclaredBehavior)
             .OrderBy(r => r.ServiceType, System.StringComparer.Ordinal)
@@ -224,16 +262,20 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
         HandlerKind.Command => $"RegisterCommand<{r.MessageType}>();",
         HandlerKind.Notification => $"RegisterNotification<{r.MessageType}>();",
         HandlerKind.StreamRequest => $"RegisterStreamRequest<{r.MessageType}, {r.ResponseType}>();",
-        _ => null, // Stream behaviors are resolved by the stream dispatcher; they need no dispatcher of their own.
+        _ => null, // Behaviors are resolved by the request's dispatcher; they need no dispatcher of their own.
     };
 
     internal static bool IsHandlerInterface(INamedTypeSymbol type)
-    {
-        var definition = type.OriginalDefinition;
-        return s_handlerInterfaces.ContainsKey(definition.MetadataName)
-            && definition.ContainingNamespace is { Name: MediatorNamespace, ContainingNamespace.IsGlobalNamespace: true }
-            && definition.ContainingAssembly?.Name == MediatorAssembly;
-    }
+        => s_handlerInterfaces.ContainsKey(type.OriginalDefinition.MetadataName) && IsMediatorType(type.OriginalDefinition);
+
+    /// <summary>A stream behavior (open or closed) that is not listed in [assembly: MediatorPipelineBehaviors].</summary>
+    private static bool IsUnlistedStreamBehavior(INamedTypeSymbol type, Compilation compilation)
+        => type.AllInterfaces.Any(i => i.OriginalDefinition.MetadataName == "IStreamPipelineBehavior`2" && IsMediatorType(i.OriginalDefinition))
+           && !BehaviorDeclarations.Read(compilation).Declarations.Any(d => SymbolEqualityComparer.Default.Equals(d.Type, type.OriginalDefinition));
+
+    private static bool IsMediatorType(INamedTypeSymbol definition)
+        => definition.ContainingNamespace is { Name: MediatorNamespace, ContainingNamespace.IsGlobalNamespace: true }
+           && definition.ContainingAssembly?.Name == MediatorAssembly;
 
     internal static bool IsOpenGeneric(INamedTypeSymbol type)
     {
@@ -247,7 +289,7 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
     /// <summary>
     /// True when generated code in the same assembly can reference the type (no private or protected nesting).
     /// </summary>
-    private static bool IsAccessible(ITypeSymbol type)
+    internal static bool IsAccessible(ITypeSymbol type)
     {
         switch (type)
         {

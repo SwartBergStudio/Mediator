@@ -30,6 +30,9 @@ internal static class Dispatch
     public static Task SendCommand<TRequest>(TRequest request, IServiceProvider serviceProvider, CancellationToken cancellationToken)
         where TRequest : IRequest
     {
+        if (request is null)
+            return Task.FromException(new ArgumentNullException(nameof(request)));
+
         return MediatorTelemetry.IsEnabled
             ? SendCommandObserved(request, serviceProvider, cancellationToken)
             : SendCommandCore(request, serviceProvider, cancellationToken);

@@ -21,7 +21,8 @@ Both flavours share one runtime. The only difference is who creates the strongly
 New project `src/Mediator.SourceGenerator` (netstandard2.0, `IIncrementalGenerator`, Roslyn 4.8 so the .NET 8 SDK works). It is shipped as a separate NuGet package, so existing users are unaffected.
 
 1. Find non-abstract, non-open-generic classes implementing `IRequestHandler<,>`, `IRequestHandler<>`,
-   `INotificationHandler<>`, `IStreamRequestHandler<,>` or `IStreamPipelineBehavior<,>`. This mirrors the reflection scan exactly.
+   `INotificationHandler<>` or `IStreamRequestHandler<,>`. This mirrors the reflection scan exactly. Behaviors are not
+   discovered (since 4.0): they come from `[assembly: MediatorPipelineBehaviors(...)]`, open or closed, in the listed order.
 2. Emit `internal static IServiceCollection AddMediatorHandlers(this IServiceCollection services)` in the project's
    root namespace. Using the root namespace avoids clashes between projects and with `InternalsVisibleTo`. The generated method:
    - calls `services.AddMediatorCore()`;
