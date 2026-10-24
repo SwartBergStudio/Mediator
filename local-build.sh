@@ -15,7 +15,7 @@ dotnet restore
 
 # Build solution
 echo "?? Building solution..."
-dotnet build --no-restore --configuration Release
+dotnet build --no-restore --configuration Release -p:Version=999.0.0-local -p:AssemblyVersion=999.0.0.0
 
 # Run tests
 echo "?? Running tests..."
@@ -23,8 +23,8 @@ dotnet test --no-build --configuration Release --verbosity normal
 
 # Pack NuGet package (local)
 echo "?? Creating NuGet package..."
-dotnet pack src/Mediator/Mediator.csproj --no-build --configuration Release --output ./local-packages
-dotnet pack src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj --no-build --configuration Release --output ./local-packages
+dotnet pack src/Mediator/Mediator.csproj --no-build --configuration Release --output ./local-packages -p:Version=999.0.0-local
+dotnet pack src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj --no-build --configuration Release --output ./local-packages -p:Version=999.0.0-local
 
 # Run benchmarks
 echo "? Running benchmarks..."

@@ -84,28 +84,32 @@ namespace Mediator.Persistence
                 throw new ArgumentException("Batch size must be greater than zero", nameof(batchSize));
 
             var items = new List<PersistedNotificationWorkItem>(batchSize);
+            if (!Directory.Exists(_directory))
+                return items;
 
-            await _semaphore.WaitAsync(cancellationToken);
-            try
+            // Files whose retry time has not arrived are skipped without counting towards the batch,
+            // so they cannot starve notifications that are ready.
+            foreach (var file in Directory.EnumerateFiles(_directory, "*.json"))
             {
-                if (!Directory.Exists(_directory))
-                    return items;
-
-                // Files whose retry time has not arrived are skipped without counting towards the batch,
-                // so they cannot starve notifications that are ready.
-                foreach (var file in Directory.EnumerateFiles(_directory, "*.json"))
+                // Locked per file, not for the whole scan: the scan reads every waiting retry, and holding the lock
+                // throughout made each PersistAsync (every Publish) wait for all of it. Per file is enough to never
+                // read a file while FailAsync rewrites it; files created or deleted meanwhile are simply seen or not.
+                PersistedNotificationWorkItem? item;
+                await _semaphore.WaitAsync(cancellationToken);
+                try
                 {
-                    var item = await ProcessFileAsync(file, cancellationToken);
-                    if (item != null)
-                    {
-                        items.Add(item);
-                        if (items.Count >= batchSize) break;
-                    }
+                    item = await ProcessFileAsync(file, cancellationToken);
                 }
-            }
-            finally
-            {
-                _semaphore.Release();
+                finally
+                {
+                    _semaphore.Release();
+                }
+
+                if (item != null)
+                {
+                    items.Add(item);
+                    if (items.Count >= batchSize) break;
+                }
             }
 
             return items;
@@ -126,6 +130,12 @@ namespace Mediator.Persistence
             catch (JsonException)
             {
                 SafeDeleteFile(filePath);
+                return null;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+            {
+                // Valid JSON of the wrong shape (a property of the wrong kind or out of range). Skipped rather than
+                // thrown, so it cannot stop the other files from being recovered; cleanup removes it eventually.
                 return null;
             }
             catch (IOException)
@@ -271,21 +281,28 @@ namespace Mediator.Persistence
                         exception?.ToString());
                 }
 
-                await WriteFileAsync(filePath, record, cancellationToken);
+                // Replaced through a temporary file like a new item: rewriting in place truncates first, and a crash
+                // before the write finished left a broken file that the next scan deleted as corrupt.
+                var tempPath = filePath + ".tmp";
+                try
+                {
+                    await WriteFileAsync(tempPath, record, cancellationToken);
+                    File.Move(tempPath, filePath, overwrite: true);
+                }
+                catch
+                {
+                    SafeDeleteFile(tempPath);
+                    throw;
+                }
                 return true;
             }
-            catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
             {
+                // The stored record is unreadable, so the notification could never run again.
                 return false;
             }
-            catch (IOException)
-            {
-                return false;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return false;
-            }
+            // IOException and UnauthorizedAccessException propagate: the file may only be locked for a moment (a virus
+            // scanner, a backup), so it is kept and the error reported, and the next recovery pass runs it again.
         }
 
         /// <inheritdoc />
@@ -297,8 +314,11 @@ namespace Mediator.Persistence
                 if (!Directory.Exists(_directory))
                     return;
 
-                var files = Directory.EnumerateFiles(_directory, "*.json");
-                
+                // Includes *.json.tmp left behind when a process stopped between writing a file and renaming it;
+                // nothing else ever removes them. Safe: writes happen under the same lock.
+                var files = System.Linq.Enumerable.Concat(Directory.EnumerateFiles(_directory, "*.json"),
+                    Directory.EnumerateFiles(_directory, "*.json.tmp"));
+
                 await Parallel.ForEachAsync(files, 
                     new ParallelOptions 
                     { 

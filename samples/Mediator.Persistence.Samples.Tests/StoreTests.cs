@@ -60,6 +60,25 @@ public sealed class RedisPersistenceTests : PersistenceContractTests
     protected override INotificationPersistence CreateStore(TimeSpan lease)
         => new RedisNotificationPersistence(s_redis.Value!, new RedisNotificationPersistenceOptions { KeyPrefix = _prefix, LeaseDuration = lease });
 
+    [SkippableFact]
+    public async Task Unreadable_item_is_dropped_and_the_rest_of_the_batch_is_returned()
+    {
+        // ToWorkItem threw on JSON it could not parse, so the whole claimed batch was lost to the caller (and stayed
+        // leased) on every pass, instead of only the unreadable item being dropped as documented.
+        EnsureAvailable();
+        var store = CreateStore(TimeSpan.Zero);
+        var id = await store.PersistAsync(new Mediator.NotificationWorkItem(null, typeof(string), DateTime.UtcNow, "\"payload\""));
+        var db = s_redis.Value!.GetDatabase();
+        await db.StringSetAsync(_prefix + "item:bad", "not json");
+        await db.SortedSetAddAsync(_prefix + "due", "bad", 0);
+
+        var pending = (await store.GetPendingAsync()).ToList();
+
+        Assert.Equal(id, Assert.Single(pending).Id);
+        Assert.False(await db.KeyExistsAsync(_prefix + "item:bad"));
+        Assert.Null(await db.SortedSetScoreAsync(_prefix + "due", "bad"));
+    }
+
     public override async Task DisposeAsync()
     {
         if (s_redis.Value is null) return;

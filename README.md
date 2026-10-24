@@ -165,14 +165,15 @@ There is one behavior interface per request shape:
 | `IRequest` (returns nothing, e.g. a command) | `IPipelineBehavior<TRequest>` |
 | `IStreamRequest<TResponse>` | `IStreamPipelineBehavior<TRequest, TResponse>` |
 
-### Open generic behaviors (recommended)
+### Declaring behaviors (recommended)
 
-Declare open generic behaviors once per project that contains handlers. The behaviors are listed in execution order:
+List the behaviors once per project that contains handlers, in execution order (the first listed is the outermost). Both open generic behaviors and closed ones, written for a single request, can be listed, mixed in any order:
 
 ```csharp
 [assembly: MediatorPipelineBehaviors(
     typeof(LoggingBehavior<,>),
     typeof(ValidationBehavior<,>),
+    typeof(GetUserCachingBehavior),        // closed: IPipelineBehavior<GetUserQuery, User>
     typeof(CommandValidationBehavior<>))]
 
 public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
@@ -197,10 +198,11 @@ public class CommandValidationBehavior<TRequest> : IPipelineBehavior<TRequest>
 }
 ```
 
-Each listed behavior is registered closed (for example `ValidationBehavior<CreateUser, Guid>`) for every request handled in that project.
+Each open generic behavior is registered closed (for example `ValidationBehavior<CreateUser, Guid>`) for every request handled in that project. A closed behavior is registered for the request it implements. Everything is registered in the listed order, so the list is the pipeline.
 - **Constraints decide where it applies.** For example, `where TRequest : IAuditable` (a marker interface of your own) limits a behavior to requests that implement it. `IPipelineBehavior<TRequest>` types apply only to requests without a response, and `IPipelineBehavior<TRequest, TResponse>` types only to requests with one.
 - **Both registration styles honour it.** The source generator emits these registrations at compile time, and `AddMediator(assemblies)` applies the same attribute when scanning.
-- **Stream behaviors work the same way.** Open generic `IStreamPipelineBehavior<,>` types can be listed in the same attribute.
+- **Stream behaviors work the same way.** Open generic and closed `IStreamPipelineBehavior<,>` types can be listed in the same attribute.
+- **Behaviors are not discovered by scanning, they are declared.** Scanning can't know the order a pipeline needs, or that a behavior is only meant for some environments, so request behaviors are only registered when listed here or registered manually. Closed stream behaviors that are not listed are still registered by scanning for compatibility, but in no defined order. The source generator reports them as `MEDGEN007`; list them here. That automatic registration is removed in the next major version.
 
 ### Registering behaviors manually
 
@@ -326,9 +328,10 @@ The generated code registers every handler and pre-creates its strongly-typed di
 | `MEDGEN001` | Warning | `SwartBerg.Mediator` is not referenced by the project. |
 | `MEDGEN002` | Warning | A handler (or its message type) is `private`/`protected` and can't be registered. Make it `internal` or `public`. |
 | `MEDGEN003` | Info | An open generic handler or behavior was skipped. List it in `[assembly: MediatorPipelineBehaviors(...)]` or register it explicitly. |
-| `MEDGEN004` | Warning | A type in `[assembly: MediatorPipelineBehaviors(...)]` isn't an open generic pipeline behavior. |
+| `MEDGEN004` | Warning | A type in `[assembly: MediatorPipelineBehaviors(...)]` isn't a pipeline behavior. |
 | `MEDGEN005` | Warning | A request declared in the project has **no handler**, so sending it would fail at runtime. |
 | `MEDGEN006` | Warning | A request has **more than one handler**. Only the last one registered is used; the others never run. |
+| `MEDGEN007` | Info | A closed stream behavior is registered automatically, in no defined order. List it in `[assembly: MediatorPipelineBehaviors(...)]`. |
 
 `MEDGEN005` and `MEDGEN006` are reported by an analyzer included in the generator package. If a request is handled in another project, suppress the warning for that one type:
 

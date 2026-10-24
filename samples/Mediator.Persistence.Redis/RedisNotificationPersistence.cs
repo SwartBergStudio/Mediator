@@ -113,7 +113,7 @@ public sealed class RedisNotificationPersistence : INotificationPersistence, INo
         if (json.IsNullOrEmpty)
             return;
 
-        var record = JsonSerializer.Deserialize((string)json!, RedisRecordContext.Default.StoredNotification);
+        var record = ReadRecord(json!);
         if (record is null)
         {
             await RemoveAsync(id);
@@ -182,7 +182,7 @@ public sealed class RedisNotificationPersistence : INotificationPersistence, INo
 
     private static PersistedNotificationWorkItem? ToWorkItem(string id, string json)
     {
-        var record = JsonSerializer.Deserialize(json, RedisRecordContext.Default.StoredNotification);
+        var record = ReadRecord(json);
         var type = record is null ? null : Type.GetType(record.NotificationType, throwOnError: false);
         if (record is null || type is null)
             return null;
@@ -197,6 +197,19 @@ public sealed class RedisNotificationPersistence : INotificationPersistence, INo
                 TargetHandlerType = record.TargetHandlerType,
             },
         };
+    }
+
+    /// <summary>The stored record, or null when it cannot be read (so the caller drops it instead of throwing).</summary>
+    private static StoredNotification? ReadRecord(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize(json, RedisRecordContext.Default.StoredNotification);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private RedisKey ItemKey(string id) => _options.KeyPrefix + "item:" + id;

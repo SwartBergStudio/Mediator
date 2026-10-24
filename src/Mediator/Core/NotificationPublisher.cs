@@ -43,7 +43,6 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task[] _workers;
     private readonly Task[] _maintenanceLoops;
-    private readonly TimeSpan[] _retryDelays;
     private readonly Func<int> _queueSize;
 
     // Serializes the recovery scan with the PersistAsync + FailAsync fallback for retry items, so the recovery loop can
@@ -81,8 +80,6 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
         _logger.LogInformation("Initializing NotificationPublisher with EnablePersistence={EnablePersistence}, WorkerCount={WorkerCount}, ChannelCapacity={ChannelCapacity}",
             _options.EnablePersistence, _options.NotificationWorkerCount, _options.ChannelCapacity);
-
-        _retryDelays = BuildRetryDelays(_options);
 
         _channel = Channel.CreateBounded<QueuedNotification>(new BoundedChannelOptions(_options.ChannelCapacity)
         {
@@ -231,22 +228,9 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         if (o.ProcessingBatchSize <= 0) o.ProcessingBatchSize = 1;
         if (o.MaxRetryAttempts < 0) o.MaxRetryAttempts = 0;
         if (o.InitialRetryDelay < TimeSpan.Zero) o.InitialRetryDelay = TimeSpan.Zero;
-        if (o.RetryDelayMultiplier <= 0) o.RetryDelayMultiplier = 1.0;
+        if (!(o.RetryDelayMultiplier > 0)) o.RetryDelayMultiplier = 1.0; // also NaN
         if (o.CleanupInterval <= TimeSpan.Zero) o.CleanupInterval = TimeSpan.FromMinutes(1);
         if (o.ProcessingInterval <= TimeSpan.Zero) o.ProcessingInterval = TimeSpan.FromSeconds(1);
-    }
-
-    private static TimeSpan[] BuildRetryDelays(MediatorOptions options)
-    {
-        if (options.MaxRetryAttempts <= 0)
-            return Array.Empty<TimeSpan>();
-
-        var delays = new TimeSpan[options.MaxRetryAttempts];
-        for (var i = 0; i < delays.Length; i++)
-        {
-            delays[i] = TimeSpan.FromTicks((long)(options.InitialRetryDelay.Ticks * Math.Pow(options.RetryDelayMultiplier, i)));
-        }
-        return delays;
     }
 
     private async Task RunPeriodicAsync(TimeSpan interval, Func<Task> action)
@@ -352,7 +336,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         if (targetHandler != null)
         {
             // A retry for one handler that failed earlier: the other handlers already succeeded.
-            handlers = Array.FindAll(handlers, h => HandlerKey(h.GetType()) == targetHandler);
+            handlers = HandlersMatching(handlers, targetHandler);
             if (handlers.Length == 0)
             {
                 _logger.LogWarning("Handler {HandlerType} for notification {NotificationType} is no longer registered; dropping its retry", targetHandler, notificationType.Name);
@@ -502,6 +486,11 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         await _persistence!.CompleteAsync(queued.PersistenceId!, _shutdown.Token).ConfigureAwait(false);
     }
 
+    // Separate method on purpose: the lambda captures targetHandler, and C# allocates that closure on entry to the
+    // method declaring it, so inside DispatchToHandlersAsync every notification paid for it, retry or not.
+    private static object[] HandlersMatching(object[] handlers, string targetHandler)
+        => Array.FindAll(handlers, h => HandlerKey(h.GetType()) == targetHandler);
+
     /// <summary>
     /// Identifies a handler across restarts and upgrades: type and assembly name, without the version.
     /// </summary>
@@ -619,7 +608,14 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         if (attemptCount >= _options.MaxRetryAttempts)
             return false;
 
-        retryAfter = DateTime.UtcNow.Add(_retryDelays[Math.Max(0, attemptCount)]);
+        // Computed per attempt rather than tabled up front: MaxRetryAttempts may be very large. Saturates at
+        // DateTime.MaxValue, because a retry time that overflows would throw and leave the item ready to run at once.
+        var now = DateTime.UtcNow;
+        var maxDelayTicks = DateTime.MaxValue.Ticks - now.Ticks;
+        var delayTicks = _options.InitialRetryDelay.Ticks * Math.Pow(_options.RetryDelayMultiplier, Math.Max(0, attemptCount));
+        retryAfter = delayTicks < maxDelayTicks
+            ? now.AddTicks(Math.Min((long)delayTicks, maxDelayTicks)) // Min: the cast can round up past the limit
+            : DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc);
         return true;
     }
 

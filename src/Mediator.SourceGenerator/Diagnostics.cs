@@ -51,8 +51,16 @@ internal static class Diagnostics
     public static readonly DiagnosticDescriptor InvalidDeclaredBehavior = new(
         id: "MEDGEN004",
         title: "Invalid pipeline behavior declaration",
-        messageFormat: "'{0}' in [assembly: MediatorPipelineBehaviors] must be a non-abstract open generic type implementing IPipelineBehavior<,>, IPipelineBehavior<> or IStreamPipelineBehavior<,> with its own type parameters",
+        messageFormat: "'{0}' in [assembly: MediatorPipelineBehaviors] must be a non-abstract pipeline behavior: a closed type implementing IPipelineBehavior<TRequest, TResponse>, IPipelineBehavior<TRequest> or IStreamPipelineBehavior<TRequest, TResponse>, or an open generic type implementing one of them with its own type parameters",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor UndeclaredStreamBehavior = new(
+        id: "MEDGEN007",
+        title: "Stream behavior is registered automatically, in no defined order",
+        messageFormat: "Stream behavior '{0}' is registered automatically, in no defined order; list it in [assembly: MediatorPipelineBehaviors(...)] to set its order. Automatic registration of stream behaviors is removed in the next major version.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true);
 }

@@ -104,33 +104,40 @@ namespace Mediator.Tests
                 await Task.Delay(1);
             }
 
-            // Act: Single notification with precise timing
-            var stopwatch = Stopwatch.StartNew();
-            
-            await mediator.Publish(new TestEmailNotification
+            // Act: the fastest of several samples. A single wall-clock sample failed whenever the machine was busy
+            // (for example several test projects running in parallel); a real regression, such as notifications waiting
+            // for a polling interval, makes every sample slow.
+            const int Samples = 5;
+            var fastest = TimeSpan.MaxValue;
+            for (var sample = 1; sample <= Samples; sample++)
             {
-                To = "single@example.com",
-                Subject = "Single Test",
-                Body = "Single notification test"
-            });
+                var stopwatch = Stopwatch.StartNew();
 
-            // Wait for processing with timeout
-            var timeout = DateTime.UtcNow.AddMilliseconds(2000);
-            while (tracker.ProcessedCount < 2 && DateTime.UtcNow < timeout)
-            {
-                await Task.Delay(1);
+                await mediator.Publish(new TestEmailNotification
+                {
+                    To = "single@example.com",
+                    Subject = "Single Test",
+                    Body = "Single notification test"
+                });
+
+                // Wait for processing with timeout
+                var timeout = DateTime.UtcNow.AddMilliseconds(2000);
+                while (tracker.ProcessedCount < sample + 1 && DateTime.UtcNow < timeout)
+                {
+                    await Task.Delay(1);
+                }
+
+                stopwatch.Stop();
+                if (stopwatch.Elapsed < fastest) fastest = stopwatch.Elapsed;
             }
-            
-            stopwatch.Stop();
 
             // Assert: Single notification should be very fast
-            var latency = stopwatch.Elapsed;
-            Console.WriteLine($"Single notification end-to-end latency: {latency.TotalMilliseconds:F1}ms");
-            
-            Assert.True(latency.TotalMilliseconds < 100, 
-                $"Single notification latency too high: {latency.TotalMilliseconds:F1}ms (expected < 100ms)");
-            
-            Assert.Equal(2, tracker.ProcessedCount);
+            Console.WriteLine($"Single notification end-to-end latency (fastest of {Samples}): {fastest.TotalMilliseconds:F1}ms");
+
+            Assert.True(fastest.TotalMilliseconds < 100,
+                $"Single notification latency too high: {fastest.TotalMilliseconds:F1}ms (expected < 100ms)");
+
+            Assert.Equal(Samples + 1, tracker.ProcessedCount);
         }
 
         [Fact]

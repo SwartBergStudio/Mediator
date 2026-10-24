@@ -10,6 +10,12 @@ namespace Mediator;
 internal static class HandlerRegistrations
 {
     /// <summary>Interfaces whose closed implementations are discovered by assembly scanning.</summary>
+    /// <remarks>
+    /// <c>IStreamPipelineBehavior&lt;,&gt;</c> is here for compatibility only: behaviors should be listed in
+    /// <see cref="MediatorPipelineBehaviorsAttribute"/> (or registered explicitly), which gives them a defined order.
+    /// Scanning registers unlisted closed stream behaviors in no defined order, and request behaviors never; the source
+    /// generator reports MEDGEN007 for such stream behaviors. Remove it from this list in the next major version.
+    /// </remarks>
     private static readonly Type[] s_handlerInterfaces =
     {
         typeof(IRequestHandler<,>),
@@ -29,9 +35,7 @@ internal static class HandlerRegistrations
         foreach (var descriptor in services)
         {
             if (descriptor.ImplementationType != null &&
-                (IsHandlerInterface(descriptor.ServiceType) ||
-                 IsClosed(descriptor.ServiceType, typeof(IPipelineBehavior<,>)) ||
-                 IsClosed(descriptor.ServiceType, typeof(IPipelineBehavior<>))))
+                (IsHandlerInterface(descriptor.ServiceType) || IsBehaviorInterface(descriptor.ServiceType)))
             {
                 existing.Add((descriptor.ServiceType, descriptor.ImplementationType));
             }
@@ -54,6 +58,7 @@ internal static class HandlerRegistrations
         foreach (var assembly in assemblies)
         {
             var requestHandlers = new List<Type>();
+            var declaredBehaviors = assembly.GetCustomAttribute<MediatorPipelineBehaviorsAttribute>()?.BehaviorTypes ?? Array.Empty<Type>();
 
             foreach (var type in GetLoadableTypes(assembly))
             {
@@ -62,9 +67,12 @@ internal static class HandlerRegistrations
                 if (!type.IsClass || type.IsAbstract || type.ContainsGenericParameters)
                     continue;
 
+                // Declared behaviors are registered by RegisterDeclaredBehaviors below, in their declared order.
+                var declared = Array.IndexOf(declaredBehaviors, type) >= 0;
+
                 foreach (var interfaceType in type.GetInterfaces())
                 {
-                    if (!IsHandlerInterface(interfaceType))
+                    if (!IsHandlerInterface(interfaceType) || declared && IsBehaviorInterface(interfaceType))
                         continue;
 
                     if (IsClosed(interfaceType, typeof(IRequestHandler<,>)) ||
@@ -77,25 +85,34 @@ internal static class HandlerRegistrations
                 }
             }
 
-            RegisterDeclaredBehaviors(services, assembly, requestHandlers, existing);
+            RegisterDeclaredBehaviors(services, declaredBehaviors, requestHandlers, existing);
         }
     }
 
     /// <summary>
-    /// Closes each behavior declared with <see cref="MediatorPipelineBehaviorsAttribute"/> over every request handled in
-    /// the assembly (skipping combinations its generic constraints reject) and registers it, in declaration order.
-    /// Mirrors what the source generator emits.
+    /// Registers the behaviors declared with <see cref="MediatorPipelineBehaviorsAttribute"/>, in declaration order: a closed
+    /// behavior for the request(s) it names, and an open generic one closed over every request handled in the assembly
+    /// (skipping combinations its generic constraints reject). Mirrors what the source generator emits.
     /// </summary>
     [RequiresUnreferencedCode("Closes generic behavior types via reflection.")]
     [RequiresDynamicCode("Closes generic behavior types via MakeGenericType.")]
-    private static void RegisterDeclaredBehaviors(IServiceCollection services, Assembly assembly, List<Type> requestHandlers, HashSet<(Type, Type)> existing)
+    private static void RegisterDeclaredBehaviors(IServiceCollection services, Type[] behaviorTypes, List<Type> requestHandlers, HashSet<(Type, Type)> existing)
     {
-        var behaviorTypes = assembly.GetCustomAttribute<MediatorPipelineBehaviorsAttribute>()?.BehaviorTypes;
-        if (behaviorTypes is null || behaviorTypes.Length == 0 || requestHandlers.Count == 0)
-            return;
-
         foreach (var behaviorType in behaviorTypes)
         {
+            if (behaviorType is null || behaviorType.IsAbstract)
+                continue;
+
+            if (!behaviorType.IsGenericTypeDefinition)
+            {
+                foreach (var behaviorInterface in behaviorType.GetInterfaces())
+                {
+                    if (IsBehaviorInterface(behaviorInterface) && existing.Add((behaviorInterface, behaviorType)))
+                        services.AddTransient(behaviorInterface, behaviorType);
+                }
+                continue;
+            }
+
             foreach (var handlerInterface in requestHandlers)
             {
                 var handlerDefinition = handlerInterface.GetGenericTypeDefinition();
@@ -162,6 +179,9 @@ internal static class HandlerRegistrations
 
         return Array.IndexOf(s_handlerInterfaces, type.GetGenericTypeDefinition()) >= 0;
     }
+
+    private static bool IsBehaviorInterface(Type type)
+        => IsClosed(type, typeof(IPipelineBehavior<,>)) || IsClosed(type, typeof(IPipelineBehavior<>)) || IsClosed(type, typeof(IStreamPipelineBehavior<,>));
 
     private static bool IsClosed(Type type, Type genericDefinition)
         => type.IsGenericType && !type.IsGenericTypeDefinition && type.GetGenericTypeDefinition() == genericDefinition;

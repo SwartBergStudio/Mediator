@@ -4,15 +4,19 @@ using Microsoft.Extensions.Logging;
 
 [assembly: Mediator.MediatorPipelineBehaviors(
     typeof(Mediator.Tests.CountingBehavior<,>),
+    typeof(Mediator.Tests.ClosedMarkedBehavior),
     typeof(Mediator.Tests.MarkedOnlyBehavior<,>),
     typeof(Mediator.Tests.CountingStreamBehavior<,>),
-    typeof(Mediator.Tests.CountingCommandBehavior<>))]
+    typeof(Mediator.Tests.ClosedDelayedStreamBehavior),
+    typeof(Mediator.Tests.CountingCommandBehavior<>),
+    typeof(Mediator.Tests.ClosedMarkedCommandBehavior))]
 
 namespace Mediator.Tests
 {
     /// <summary>
-    /// Behaviors declared with [assembly: MediatorPipelineBehaviors] are closed over every request in this assembly,
-    /// by the source generator (AddMediatorHandlers) and by assembly scanning alike. They are pass-through so the
+    /// Behaviors declared with [assembly: MediatorPipelineBehaviors] are registered in the declared order: open ones closed
+    /// over every request in this assembly, closed ones for the request they implement, by the source generator
+    /// (AddMediatorHandlers) and by assembly scanning alike. They are pass-through so the
     /// rest of the suite is unaffected, and they record invocations per request type.
     /// </summary>
     public class DeclaredBehaviorTests
@@ -23,13 +27,21 @@ namespace Mediator.Tests
             var services = new ServiceCollection().AddMediator(typeof(DeclaredBehaviorTests).Assembly);
 
             Implementations<IPipelineBehavior<MarkedValueRequest, int>>(services)
-                .Should().Equal(typeof(CountingBehavior<MarkedValueRequest, int>), typeof(MarkedOnlyBehavior<MarkedValueRequest, int>));
+                .Should().Equal(typeof(CountingBehavior<MarkedValueRequest, int>), typeof(ClosedMarkedBehavior), typeof(MarkedOnlyBehavior<MarkedValueRequest, int>));
 
             Implementations<IPipelineBehavior<TestRequest, string>>(services)
                 .Should().Equal(typeof(CountingBehavior<TestRequest, string>));
+        }
+
+        [Fact]
+        public void Scanning_ShouldRegisterDeclaredClosedStreamBehaviorOnceInItsDeclaredPosition()
+        {
+            // Unlisted closed stream behaviors are still registered by scanning (compatibility), but a listed one is
+            // registered only where it is declared: after the open behavior listed before it.
+            var services = new ServiceCollection().AddMediator(typeof(DeclaredBehaviorTests).Assembly);
 
             Implementations<IStreamPipelineBehavior<TestDelayedStreamRequest, int>>(services)
-                .Should().Contain(typeof(CountingStreamBehavior<TestDelayedStreamRequest, int>));
+                .Should().Equal(typeof(CountingStreamBehavior<TestDelayedStreamRequest, int>), typeof(ClosedDelayedStreamBehavior));
         }
 
         [Fact]
@@ -39,6 +51,8 @@ namespace Mediator.Tests
 
             Implementations<IPipelineBehavior<TestRequestWithoutResponse>>(services)
                 .Should().Equal(typeof(CountingCommandBehavior<TestRequestWithoutResponse>));
+            Implementations<IPipelineBehavior<MarkedCommand>>(services)
+                .Should().Equal(typeof(CountingCommandBehavior<MarkedCommand>), typeof(ClosedMarkedCommandBehavior));
             Implementations<IPipelineBehavior<TestRequest, string>>(services)
                 .Should().NotContain(typeof(CountingCommandBehavior<TestRequestWithoutResponse>));
         }
@@ -55,7 +69,7 @@ namespace Mediator.Tests
             var command = new MarkedCommand();
             await provider.GetRequiredService<IMediator>().Send(command);
 
-            command.Trail.Should().Equal("command-behavior", "handler");
+            command.Trail.Should().Equal("command-behavior", "closed-command-behavior", "handler");
             BehaviorCounters.Get(typeof(MarkedCommand)).Should().Be(before + 1);
         }
 
@@ -66,7 +80,8 @@ namespace Mediator.Tests
             services.AddMediator(typeof(DeclaredBehaviorTests).Assembly);
             services.AddMediator(typeof(DeclaredBehaviorTests).Assembly);
 
-            Implementations<IPipelineBehavior<MarkedValueRequest, int>>(services).Should().HaveCount(2);
+            Implementations<IPipelineBehavior<MarkedValueRequest, int>>(services).Should().HaveCount(3);
+            Implementations<IStreamPipelineBehavior<TestDelayedStreamRequest, int>>(services).Should().HaveCount(2);
         }
 
         [Fact]
@@ -84,7 +99,7 @@ namespace Mediator.Tests
             var result = await provider.GetRequiredService<IMediator>().Send(request);
 
             result.Should().Be(21);
-            request.Trail.Should().Equal("counting", "marked-only", "handler");
+            request.Trail.Should().Equal("counting", "closed", "marked-only", "handler");
             BehaviorCounters.Get(typeof(MarkedValueRequest)).Should().BeGreaterThan(0);
         }
 
@@ -175,5 +190,29 @@ namespace Mediator.Tests
             BehaviorCounters.Increment(typeof(TRequest));
             return next();
         }
+    }
+
+    /// <summary>Closed behavior declared between two open ones: it must run in its declared position.</summary>
+    public sealed class ClosedMarkedBehavior : IPipelineBehavior<MarkedValueRequest, int>
+    {
+        public Task<int> Handle(MarkedValueRequest request, RequestHandlerDelegate<int> next, CancellationToken cancellationToken)
+        {
+            request.Trail.Add("closed");
+            return next();
+        }
+    }
+
+    public sealed class ClosedMarkedCommandBehavior : IPipelineBehavior<MarkedCommand>
+    {
+        public Task Handle(MarkedCommand request, RequestHandlerDelegate next, CancellationToken cancellationToken)
+        {
+            request.Trail.Add("closed-command-behavior");
+            return next();
+        }
+    }
+
+    public sealed class ClosedDelayedStreamBehavior : IStreamPipelineBehavior<TestDelayedStreamRequest, int>
+    {
+        public IAsyncEnumerable<int> Handle(TestDelayedStreamRequest request, StreamHandlerDelegate<int> next, CancellationToken cancellationToken) => next();
     }
 }
