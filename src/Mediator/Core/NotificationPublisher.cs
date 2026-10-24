@@ -20,9 +20,10 @@ namespace Mediator.Core;
 /// this process are never re-queued by the recovery loop, so a notification is handled once unless a handler fails or
 /// the process stops.
 /// </remarks>
-internal sealed class NotificationPublisher : INotificationPublisher, IDisposable
+internal sealed class NotificationPublisher : INotificationPublisher, IDisposable, IAsyncDisposable
 {
-    private static readonly TimeSpan s_shutdownTimeout = TimeSpan.FromSeconds(2);
+    // How long shutdown waits for tasks to stop once cancelled (maintenance loops, or workers after ShutdownTimeout).
+    private static readonly TimeSpan s_cancelGracePeriod = TimeSpan.FromSeconds(2);
 
     private readonly IScopeProvider _scopeProvider;
     private readonly ILogger<NotificationPublisher> _logger;
@@ -40,7 +41,14 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     // be queued again. See RecoverPendingAsync.
     private readonly ConcurrentDictionary<string, long> _settledPersistedIds = new(StringComparer.Ordinal);
     private long _settleSequence;
+    // Cancelled when shutdown stops waiting: the token handlers and persistence calls receive.
     private readonly CancellationTokenSource _shutdown = new();
+    // Cancelled first at shutdown, so no recovery pass queues more work while the queue drains.
+    private readonly CancellationTokenSource _stopMaintenance = new();
+    // Cancelled to make workers stop taking queued notifications (they finish the one they are handling).
+    private readonly CancellationTokenSource _stopReading = new();
+    private readonly object _stopLock = new();
+    private Task<bool>? _stopping;
     private readonly Task[] _workers;
     private readonly Task[] _maintenanceLoops;
     private readonly Func<int> _queueSize;
@@ -49,7 +57,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     // never see a retry item before its retry time is set.
     private readonly SemaphoreSlim _recoveryGate = new(1, 1);
 
-    private bool _disposed;
+    private int _disposed;
 
     public NotificationPublisher(
         IServiceProvider serviceProvider,
@@ -62,6 +70,11 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         _options = options.Value;
         _isDebugEnabled = _logger.IsEnabled(LogLevel.Debug);
         SanitizeOptions(_options);
+        if (_options.NotificationWorkerCount <= 0)
+        {
+            _logger.LogWarning("NotificationWorkerCount was {WorkerCount}; using 1. Without a worker, background notifications are never handled.", _options.NotificationWorkerCount);
+            _options.NotificationWorkerCount = 1;
+        }
         _continueOnCapturedContext = !_options.UseConfigureAwaitGlobally;
 
         if (_options.EnablePersistence)
@@ -94,7 +107,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         // handler would see its AsyncLocal state (HttpContext, logger scopes, Activity.Current).
         using (ExecutionContext.SuppressFlow())
         {
-            _workers = new Task[Math.Max(0, _options.NotificationWorkerCount)];
+            _workers = new Task[_options.NotificationWorkerCount];
             for (var i = 0; i < _workers.Length; i++)
             {
                 _workers[i] = Task.Run(ProcessNotificationsAsync, _shutdown.Token);
@@ -124,7 +137,11 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     public async Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
         where TNotification : INotification
     {
-        var notificationType = notification?.GetType() ?? typeof(TNotification);
+        // Thrown inside the async method, so it surfaces through the task, like Send and PublishAndWait.
+        if (notification is null)
+            throw new ArgumentNullException(nameof(notification));
+
+        var notificationType = notification.GetType();
         if (_isDebugEnabled) _logger.LogDebug("Publishing notification of type {NotificationType}", notificationType.Name);
 
         // The publish span covers persisting and queueing; background handler spans become its children, so a trace
@@ -172,20 +189,70 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         }
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Graceful shutdown, called by the host before it disposes the service provider: stops the maintenance loops and
+    /// lets the workers finish what is queued or running, for up to <see cref="MediatorOptions.ShutdownTimeout"/> (or until
+    /// the host's own shutdown timeout cancels <paramref name="cancellationToken"/>), then cancels the handlers' token.
+    /// </summary>
+    public Task StopAsync(CancellationToken cancellationToken) => Stop(drainQueue: true, cancellationToken);
+
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Stops the publisher if the host has not (no generic host). The service provider is being disposed, so no DI scope
+    /// can be created for a queued notification: running handlers get <see cref="MediatorOptions.ShutdownTimeout"/> to
+    /// finish, and notifications still queued are logged as not handled.
+    /// </summary>
+    public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
 
+        // A handler that ignores cancellation may still be running, and uses these when it finishes; disposing them then
+        // threw ObjectDisposedException. They hold no unmanaged resources, so leaving them to the GC is safe.
+        if (await Stop(drainQueue: false, CancellationToken.None).ConfigureAwait(false))
+        {
+            _shutdown.Dispose();
+            _stopMaintenance.Dispose();
+            _stopReading.Dispose();
+            _recoveryGate.Dispose();
+        }
+    }
+
+    /// <summary>Stops once; later calls wait for the first. Returns whether every loop and worker has finished.</summary>
+    private Task<bool> Stop(bool drainQueue, CancellationToken cancellationToken)
+    {
+        lock (_stopLock)
+        {
+            return _stopping ??= StopCoreAsync(drainQueue, cancellationToken);
+        }
+    }
+
+    private async Task<bool> StopCoreAsync(bool drainQueue, CancellationToken cancellationToken)
+    {
         MediatorTelemetry.UnregisterQueue(_queueSize);
-        _shutdown.Cancel();
+
+        _stopMaintenance.Cancel();
+        var maintenanceStopped = await WaitAsync(_maintenanceLoops, s_cancelGracePeriod, CancellationToken.None).ConfigureAwait(false);
+
         _channel.Writer.TryComplete();
+        if (!drainQueue) _stopReading.Cancel();
+        var workersStopped = await WaitAsync(_workers, _options.ShutdownTimeout, cancellationToken).ConfigureAwait(false);
 
-        WaitQuietly(_workers);
-        WaitQuietly(_maintenanceLoops);
+        var notHandled = _channel.Reader.Count;
+        if (!workersStopped || notHandled > 0)
+        {
+            _logger.LogWarning("Stopping with {QueuedCount} background notifications not handled{Running}. {Outcome}",
+                notHandled,
+                workersStopped ? "" : $" and handlers still running after the shutdown timeout ({_options.ShutdownTimeout}); cancelling them",
+                _persistence != null ? "They stay in storage and are handled on the next start." : "Without persistence, they are lost.");
+        }
 
-        _shutdown.Dispose();
-        _recoveryGate.Dispose();
+        _stopReading.Cancel();
+        _shutdown.Cancel();
+        if (!workersStopped)
+            workersStopped = await WaitAsync(_workers, s_cancelGracePeriod, CancellationToken.None).ConfigureAwait(false);
+
+        return maintenanceStopped && workersStopped;
     }
 
     /// <summary>
@@ -231,6 +298,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         if (!(o.RetryDelayMultiplier > 0)) o.RetryDelayMultiplier = 1.0; // also NaN
         if (o.CleanupInterval <= TimeSpan.Zero) o.CleanupInterval = TimeSpan.FromMinutes(1);
         if (o.ProcessingInterval <= TimeSpan.Zero) o.ProcessingInterval = TimeSpan.FromSeconds(1);
+        if (o.ShutdownTimeout < TimeSpan.Zero && o.ShutdownTimeout != Timeout.InfiniteTimeSpan) o.ShutdownTimeout = TimeSpan.Zero;
     }
 
     private async Task RunPeriodicAsync(TimeSpan interval, Func<Task> action)
@@ -238,13 +306,13 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         using var timer = new PeriodicTimer(interval);
         try
         {
-            while (await timer.WaitForNextTickAsync(_shutdown.Token).ConfigureAwait(false))
+            while (await timer.WaitForNextTickAsync(_stopMaintenance.Token).ConfigureAwait(false))
             {
                 try
                 {
                     await action().ConfigureAwait(false);
                 }
-                catch (Exception ex) when (!_shutdown.IsCancellationRequested)
+                catch (Exception ex) when (!_stopMaintenance.IsCancellationRequested)
                 {
                     _logger.LogError(ex, "Periodic task error occurred");
                 }
@@ -258,8 +326,15 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         _logger.LogInformation("Background notification processor started");
         try
         {
-            await foreach (var queued in _channel.Reader.ReadAllAsync(_shutdown.Token).ConfigureAwait(false))
+            // Not ReadAllAsync: it only checks the token while waiting, so a stopping worker kept taking queued items.
+            // The token is checked before each item is taken, so items left behind are still counted in the queue.
+            var reader = _channel.Reader;
+            var stop = _stopReading.Token;
+            while (await reader.WaitToReadAsync(stop).ConfigureAwait(false))
             {
+                if (stop.IsCancellationRequested || !reader.TryRead(out var queued))
+                    continue;
+
                 try
                 {
                     await ProcessQueuedAsync(queued).ConfigureAwait(false);
@@ -316,9 +391,17 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     }
 
     /// <summary>
-    /// Invokes the notification's handlers (or only <paramref name="targetHandler"/>) in a dedicated DI scope. Handler
-    /// failures are isolated, logged and returned.
+    /// Invokes the notification's handlers (or only <paramref name="targetHandler"/>) concurrently, each in a DI scope of
+    /// its own. Handler failures are isolated, logged and returned. Failing to create the scope or resolve the handlers
+    /// fails the whole notification, so it is retried like a failed handler instead of being lost or repeated at once.
     /// </summary>
+    /// <remarks>
+    /// One scope per handler: handlers run at the same time, so a shared scope meant sharing scoped services that are
+    /// not thread-safe (a DbContext), and one handler's failed, half-saved state reaching another's SaveChanges. A retry
+    /// already ran one handler alone in a fresh scope, so every run now has the same isolation. A scope can only resolve
+    /// all of a notification's handlers, so each extra scope resolves them all and uses its own one; a notification with a
+    /// single handler (the common case) still needs one scope.
+    /// </remarks>
     private async Task<DispatchResult> DispatchToHandlersAsync(Type notificationType, object notification, string? targetHandler, ActivityContext parent)
     {
         if (_isDebugEnabled) _logger.LogDebug("Processing notification {NotificationType}", notificationType.Name);
@@ -330,57 +413,140 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
             return DispatchResult.Success;
         }
 
-        using var scope = _scopeProvider.CreateScope();
-        var handlers = wrapper.ResolveHandlers(scope.ServiceProvider);
-
-        if (targetHandler != null)
+        AsyncServiceScope scope;
+        try
         {
-            // A retry for one handler that failed earlier: the other handlers already succeeded.
-            handlers = HandlersMatching(handlers, targetHandler);
-            if (handlers.Length == 0)
+            scope = new AsyncServiceScope(_scopeProvider.CreateScope());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not create a DI scope for notification {NotificationType}", notificationType.Name);
+            return DispatchResult.Failed(ex);
+        }
+
+        try
+        {
+            object[] handlers;
+            try
+            {
+                handlers = wrapper.ResolveHandlers(scope.ServiceProvider);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Could not resolve the handlers of notification {NotificationType}", notificationType.Name);
+                return DispatchResult.Failed(ex);
+            }
+
+            // A retry is for one handler that failed earlier: the other handlers already succeeded.
+            var selected = targetHandler == null ? null : IndicesOf(handlers, targetHandler);
+            if (selected is { Length: 0 })
             {
                 _logger.LogWarning("Handler {HandlerType} for notification {NotificationType} is no longer registered; dropping its retry", targetHandler, notificationType.Name);
                 return DispatchResult.Success;
             }
-        }
 
-        if (_isDebugEnabled) _logger.LogDebug("Discovered {HandlerCount} handlers for notification type {NotificationType}", handlers.Length, notificationType.Name);
+            var count = selected?.Length ?? handlers.Length;
+            if (_isDebugEnabled) _logger.LogDebug("Discovered {HandlerCount} handlers for notification type {NotificationType}", count, notificationType.Name);
 
-        if (handlers.Length == 0)
-            return DispatchResult.Success;
+            if (count == 0)
+                return DispatchResult.Success;
 
-        var token = _shutdown.Token;
-        if (handlers.Length == 1)
-        {
-            var failure = await InvokeHandlerAsync(wrapper, handlers[0], notification, notificationType, parent, token).ConfigureAwait(false);
-            return failure == null ? DispatchResult.Success : new DispatchResult(1, new[] { new HandlerFailure(handlers[0].GetType(), failure) });
-        }
-
-        var count = handlers.Length;
-        var pool = ArrayPool<Task<Exception?>>.Shared;
-        var tasks = pool.Rent(count);
-        try
-        {
-            // Start every handler before awaiting so they run concurrently.
-            for (var i = 0; i < count; i++)
+            var token = _shutdown.Token;
+            var first = handlers[selected?[0] ?? 0];
+            if (count == 1)
             {
-                tasks[i] = InvokeHandlerAsync(wrapper, handlers[i], notification, notificationType, parent, token);
+                var failure = await InvokeHandlerAsync(wrapper, first, notification, notificationType, parent, token).ConfigureAwait(false);
+                return failure == null ? DispatchResult.Success : new DispatchResult(1, new[] { new HandlerFailure(first.GetType(), failure) });
             }
 
-            List<HandlerFailure>? failures = null;
-            for (var i = 0; i < count; i++)
+            var pool = ArrayPool<Task<Exception?>>.Shared;
+            var tasks = pool.Rent(count);
+            try
             {
-                var failure = await tasks[i].ConfigureAwait(false);
-                if (failure != null) (failures ??= new List<HandlerFailure>()).Add(new HandlerFailure(handlers[i].GetType(), failure));
-            }
+                // Start every handler before awaiting so they run concurrently: the first in this scope, each other one
+                // in a scope of its own.
+                tasks[0] = InvokeHandlerAsync(wrapper, first, notification, notificationType, parent, token);
+                for (var i = 1; i < count; i++)
+                {
+                    tasks[i] = InvokeInOwnScopeAsync(wrapper, selected?[i] ?? i, handlers.Length, notification, notificationType, parent, token);
+                }
 
-            if (_isDebugEnabled) _logger.LogDebug("All {HandlerCount} handlers completed for {NotificationType}", count, notificationType.Name);
-            return failures == null ? DispatchResult.Success : new DispatchResult(count, failures);
+                List<HandlerFailure>? failures = null;
+                for (var i = 0; i < count; i++)
+                {
+                    var failure = await tasks[i].ConfigureAwait(false);
+                    if (failure != null) (failures ??= new List<HandlerFailure>()).Add(new HandlerFailure(handlers[selected?[i] ?? i].GetType(), failure));
+                }
+
+                if (_isDebugEnabled) _logger.LogDebug("All {HandlerCount} handlers completed for {NotificationType}", count, notificationType.Name);
+                return failures == null ? DispatchResult.Success : new DispatchResult(count, failures);
+            }
+            finally
+            {
+                Array.Clear(tasks, 0, count);
+                pool.Return(tasks);
+            }
         }
         finally
         {
-            Array.Clear(tasks, 0, count);
-            pool.Return(tasks);
+            await DisposeScopeAsync(scope, notificationType).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Runs the handler at <paramref name="index"/> in a new DI scope. Returns its failure, or <c>null</c> on success.
+    /// </summary>
+    private async Task<Exception?> InvokeInOwnScopeAsync(NotificationHandlerWrapper wrapper, int index, int expectedCount, object notification, Type notificationType, ActivityContext parent, CancellationToken token)
+    {
+        AsyncServiceScope scope;
+        try
+        {
+            scope = new AsyncServiceScope(_scopeProvider.CreateScope());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not create a DI scope for notification {NotificationType}", notificationType.Name);
+            return ex;
+        }
+
+        try
+        {
+            object handler;
+            try
+            {
+                var handlers = wrapper.ResolveHandlers(scope.ServiceProvider);
+                if (handlers.Length != expectedCount)
+                    throw new InvalidOperationException($"Notification {notificationType.Name} resolved {handlers.Length} handlers in one scope and {expectedCount} in another.");
+                handler = handlers[index];
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Could not resolve the handlers of notification {NotificationType}", notificationType.Name);
+                return ex;
+            }
+
+            return await InvokeHandlerAsync(wrapper, handler, notification, notificationType, parent, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            await DisposeScopeAsync(scope, notificationType).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Disposes the scope asynchronously, which also disposes scoped services that only implement IAsyncDisposable (a
+    /// synchronous Dispose throws for those). A failure is logged: the handlers have finished, so it must not turn their
+    /// result into a failure.
+    /// </summary>
+    private async ValueTask DisposeScopeAsync(AsyncServiceScope scope, Type notificationType)
+    {
+        try
+        {
+            await scope.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Disposing the DI scope of notification {NotificationType} failed", notificationType.Name);
         }
     }
 
@@ -414,7 +580,12 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         var notificationType = queued.WorkItem.NotificationType;
         try
         {
-            if (result.Failures == null)
+            if (result.Error != null)
+            {
+                // The handlers could not be run at all: retry the whole item.
+                await ScheduleRetryAsync(id, queued.AttemptCount, result.Error, notificationType).ConfigureAwait(false);
+            }
+            else if (result.Failures == null)
             {
                 await _persistence!.CompleteAsync(id, _shutdown.Token).ConfigureAwait(false);
                 if (_isDebugEnabled) _logger.LogDebug("Marked persisted notification {NotificationId} as complete", id);
@@ -429,9 +600,11 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
                 await SplitIntoHandlerRetriesAsync(queued, result.Failures).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        catch (Exception ex) when (_shutdown.IsCancellationRequested && ex is OperationCanceledException or ObjectDisposedException)
         {
-            // Shutting down: the persisted item stays in storage and is recovered on the next start.
+            // Shut down before the outcome could be recorded (the store may already be disposed): the item stays in
+            // storage and is handled again on the next start.
+            _logger.LogInformation("Shutting down: the outcome of persisted notification {NotificationId} was not recorded; it is handled again on the next start", id);
         }
     }
 
@@ -486,10 +659,16 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
         await _persistence!.CompleteAsync(queued.PersistenceId!, _shutdown.Token).ConfigureAwait(false);
     }
 
-    // Separate method on purpose: the lambda captures targetHandler, and C# allocates that closure on entry to the
-    // method declaring it, so inside DispatchToHandlersAsync every notification paid for it, retry or not.
-    private static object[] HandlersMatching(object[] handlers, string targetHandler)
-        => Array.FindAll(handlers, h => HandlerKey(h.GetType()) == targetHandler);
+    /// <summary>The positions of the handlers whose <see cref="HandlerKey"/> is <paramref name="targetHandler"/>.</summary>
+    private static int[] IndicesOf(object[] handlers, string targetHandler)
+    {
+        var matches = new List<int>(1);
+        for (var i = 0; i < handlers.Length; i++)
+        {
+            if (HandlerKey(handlers[i].GetType()) == targetHandler) matches.Add(i);
+        }
+        return matches.ToArray();
+    }
 
     /// <summary>
     /// Identifies a handler across restarts and upgrades: type and assembly name, without the version.
@@ -498,7 +677,8 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
     private async Task RecoverNotificationsAsync()
     {
-        await _recoveryGate.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+        // Maintenance token: shutdown stops recovery first, so it never queues work after the queue is closed.
+        await _recoveryGate.WaitAsync(_stopMaintenance.Token).ConfigureAwait(false);
         try
         {
             await RecoverPendingAsync().ConfigureAwait(false);
@@ -513,7 +693,7 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     {
         if (_isDebugEnabled) _logger.LogDebug("Starting recovery of pending notifications");
         var scanStart = Interlocked.Read(ref _settleSequence);
-        var pending = await _persistence!.GetPendingAsync(_options.ProcessingBatchSize, _shutdown.Token).ConfigureAwait(false);
+        var pending = await _persistence!.GetPendingAsync(_options.ProcessingBatchSize, _stopMaintenance.Token).ConfigureAwait(false);
         try
         {
             await RequeuePendingAsync(pending, scanStart).ConfigureAwait(false);
@@ -533,6 +713,9 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
         foreach (var persistedItem in pending)
         {
+            if (_stopMaintenance.IsCancellationRequested)
+                return;
+
             if (!IsValidPersistedItem(persistedItem))
             {
                 _logger.LogWarning("Invalid persisted item found during recovery, skipping. Id: {Id}", persistedItem?.Id ?? "null");
@@ -639,16 +822,30 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
     {
         var cutoffDate = DateTime.UtcNow.Subtract(_options.CleanupRetentionPeriod);
         if (_isDebugEnabled) _logger.LogDebug("Running cleanup of persisted notifications before {CutoffDate}", cutoffDate);
-        await _persistence!.CleanupAsync(cutoffDate, _shutdown.Token).ConfigureAwait(false);
+        await _persistence!.CleanupAsync(cutoffDate, _stopMaintenance.Token).ConfigureAwait(false);
         _logger.LogInformation("Cleanup completed for persisted notifications before {CutoffDate}", cutoffDate);
     }
 
-    private static void WaitQuietly(Task[] tasks)
+    /// <summary>
+    /// Waits for the tasks up to <paramref name="timeout"/>, or until <paramref name="cancellationToken"/> is cancelled;
+    /// returns whether they all finished.
+    /// </summary>
+    private static async Task<bool> WaitAsync(Task[] tasks, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        if (tasks.Length == 0) return;
-        try { Task.WaitAll(tasks, s_shutdownTimeout); }
-        catch (AggregateException) { }
-        catch (OperationCanceledException) { }
+        if (tasks.Length == 0) return true;
+        try
+        {
+            await Task.WhenAll(tasks).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is TimeoutException || ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception)
+        {
+            // The loops handle their own exceptions; a faulted or cancelled task has finished all the same.
+        }
+        return true;
     }
 
     /// <summary>
@@ -659,9 +856,14 @@ internal sealed class NotificationPublisher : INotificationPublisher, IDisposabl
 
     private readonly record struct HandlerFailure(Type HandlerType, Exception Error);
 
-    /// <summary>Outcome of dispatching to handlers: how many ran, and which failed (<c>null</c> when none did).</summary>
-    private readonly record struct DispatchResult(int HandlerCount, IReadOnlyList<HandlerFailure>? Failures)
+    /// <summary>
+    /// Outcome of dispatching to handlers: how many ran, which failed (<c>null</c> when none did), and the error when the
+    /// handlers could not be run at all.
+    /// </summary>
+    private readonly record struct DispatchResult(int HandlerCount, IReadOnlyList<HandlerFailure>? Failures, Exception? Error = null)
     {
         public static DispatchResult Success => default;
+
+        public static DispatchResult Failed(Exception error) => new(0, null, error);
     }
 }

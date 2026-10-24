@@ -202,7 +202,7 @@ Each open generic behavior is registered closed (for example `ValidationBehavior
 - **Constraints decide where it applies.** For example, `where TRequest : IAuditable` (a marker interface of your own) limits a behavior to requests that implement it. `IPipelineBehavior<TRequest>` types apply only to requests without a response, and `IPipelineBehavior<TRequest, TResponse>` types only to requests with one.
 - **Both registration styles honour it.** The source generator emits these registrations at compile time, and `AddMediator(assemblies)` applies the same attribute when scanning.
 - **Stream behaviors work the same way.** Open generic and closed `IStreamPipelineBehavior<,>` types can be listed in the same attribute.
-- **Behaviors are not discovered by scanning, they are declared.** Scanning can't know the order a pipeline needs, or that a behavior is only meant for some environments, so request behaviors are only registered when listed here or registered manually. Closed stream behaviors that are not listed are still registered by scanning for compatibility, but in no defined order. The source generator reports them as `MEDGEN007`; list them here. That automatic registration is removed in the next major version.
+- **Behaviors are declared, not discovered.** Scanning can't know the order a pipeline needs, or that a behavior is only meant for some environments. So a behavior, request or stream, is only registered when it is listed here or registered manually. (Before 4.0, scanning also registered closed stream behaviors, in no defined order. The source generator reports unlisted stream behaviors as `MEDGEN007`, so they're easy to find when upgrading.)
 
 ### Registering behaviors manually
 
@@ -219,19 +219,35 @@ Closed (non-generic) stream behaviors are discovered automatically.
 
 ## Notifications and Persistence
 
-There are two ways to publish a notification:
+There are two ways to publish a notification, and they behave very differently:
 
-| | `Publish` (background) | `PublishAndWait` (awaited) |
+| | `Publish` (background, the default) | `PublishAndWait` (awaited) |
 |---|---|---|
-| Returns | As soon as the notification is queued | After every handler has finished |
-| Handlers run | Later, on background workers, all started together | Now, one after another in registration order |
-| DI scope | A new scope per notification | The caller's scope (same `DbContext`, same user session) |
-| A handler fails | Logged; other handlers still run; retried if persistence is on | The exception reaches the caller; the remaining handlers are skipped |
-| Persistence | Optional (crash-safe, with retries) | Not used |
+| Returns | As soon as the notification is queued (and persisted, if enabled) | After every handler has finished |
+| Handlers run | Later, on background workers, never on the caller's thread | Now, inside your `await`, one after another in registration order |
+| DI scope | A new scope **per handler** | The caller's scope (same `DbContext`, same user session) |
+| Several handlers | Run at the same time, isolated from each other | Run one after another, sharing the caller's scoped services |
+| A handler fails | Logged; the other handlers still run; retried if persistence is on | The exception reaches the caller; the remaining handlers are skipped |
+| Caller's cancellation token | Only cancels queueing, not the handlers | Passed to every handler |
+| Persistence and retries | Optional (crash-safe, with per-handler retries) | Not used |
+| On app shutdown | Queued and running notifications finish first (up to `ShutdownTimeout`) | Nothing to drain: the caller awaited them |
 
-**Use `Publish` for side effects that shouldn't slow down or fail the caller:** emails, push or "in progress" updates, cache refreshes, audit trails, integration events. The user gets a response sooner because these run afterwards. The work still uses the same server, so this improves response time rather than total capacity.
+### `Publish`: fire and forget, by design
 
-**Use `PublishAndWait` when the work must succeed or fail with the caller:** for example, domain events that update related data in the same `DbContext` or transaction, or handlers that need the current user's scoped session.
+`Publish` hands the notification to a pool of background workers and returns. The caller never waits for a handler, never sees a handler's exception, and never shares a DI scope or transaction with one. This is deliberate: it's how notifications are meant to work in this library. With MediatR, the same effect needs a custom background-publishing behavior; here it's the default.
+
+Use it for side effects that shouldn't slow down or fail the request: emails, push notifications, cache refreshes, audit trails, read models, integration events. The response goes back sooner because this work runs afterwards. It still runs on the same server, so this improves response time, not total capacity.
+
+What that means for your handlers:
+- **Put what a handler needs into the notification** (ids, the user id, a correlation id). The handler runs later, in a new DI scope, so per-request scoped services such as an `IUserSession` or the `HttpContext` aren't the caller's.
+- **Each handler gets its own DI scope**, also when several handle the same notification and run at the same time. Two handlers can each use a scoped `DbContext` safely, and one handler's failure can't leave half-saved changes for another.
+- **Handlers can run more than once** if persistence is on (after a crash, or a retry), so make them idempotent.
+- **Order isn't guaranteed** between notifications, or between the handlers of one notification.
+- **On shutdown**, the generic host waits for queued and running notifications to finish, up to `ShutdownTimeout` (default 5 seconds), before cancelling the handlers' token. Without persistence, notifications that don't finish in time are lost and logged as a warning; with persistence they're handled on the next start.
+
+### `PublishAndWait`: when the work belongs to the caller
+
+`PublishAndWait` runs the handlers now, in the caller's DI scope, one after another, and throws the first handler exception to the caller. Use it when the work must succeed or fail together with the caller. Domain events that update related data in the same `DbContext` or transaction are the typical case.
 
 ```csharp
 await mediator.PublishAndWait(new InvoiceApproved(invoice.Id), cancellationToken); // same scope, before SaveChanges
@@ -239,7 +255,11 @@ await dbContext.SaveChangesAsync(cancellationToken);
 await mediator.Publish(new SendInvoiceEmail(invoice.Id), cancellationToken);       // background side effect
 ```
 
-> With `Publish`, handlers run in a **new DI scope**, not the publisher's. Scoped services such as a per-user `IUserSession` are therefore fresh instances there. Put what the handlers need, such as the user id, in the notification itself, or use `PublishAndWait`.
+### Coming from MediatR
+
+MediatR's `Publish` awaits the handlers in the caller's scope; this library's `Publish` doesn't. When migrating:
+- Code that relied on handlers having finished when `Publish` returns, on handler exceptions reaching the caller, or on handlers sharing the caller's `DbContext` or transaction, should call `PublishAndWait` instead.
+- If you used a behavior or a custom `INotificationPublisher` to run notifications in the background, you can remove it: `Publish` already does that.
 
 ### Persistence for background notifications
 
@@ -331,7 +351,7 @@ The generated code registers every handler and pre-creates its strongly-typed di
 | `MEDGEN004` | Warning | A type in `[assembly: MediatorPipelineBehaviors(...)]` isn't a pipeline behavior. |
 | `MEDGEN005` | Warning | A request declared in the project has **no handler**, so sending it would fail at runtime. |
 | `MEDGEN006` | Warning | A request has **more than one handler**. Only the last one registered is used; the others never run. |
-| `MEDGEN007` | Info | A closed stream behavior is registered automatically, in no defined order. List it in `[assembly: MediatorPipelineBehaviors(...)]`. |
+| `MEDGEN007` | Info | A stream behavior isn't listed in `[assembly: MediatorPipelineBehaviors(...)]`, so it isn't registered (since 4.0). List it, or register it yourself and suppress the message. |
 
 `MEDGEN005` and `MEDGEN006` are reported by an analyzer included in the generator package. If a request is handled in another project, suppress the warning for that one type:
 
@@ -421,6 +441,7 @@ services.AddMediator(options =>
     options.RetryDelayMultiplier = 2.0;
     options.CleanupRetentionPeriod = TimeSpan.FromHours(24);
     options.CleanupInterval = TimeSpan.FromHours(1);
+    options.ShutdownTimeout = TimeSpan.FromSeconds(10);     // drain background notifications on shutdown (default: 5s)
     // options.UseConfigureAwaitGlobally = false;           // mediator's own awaits (publish/persistence) only
 }, typeof(Program).Assembly);
 ```
@@ -432,7 +453,7 @@ services.AddMediator(options =>
 ```
 Send / CreateStream ──► typed dispatcher (cached per message type) ──► behaviors ──► handler
 
-Publish ──► [Persist] ──► Channel ──► Background workers ──► handlers (own DI scope)
+Publish ──► [Persist] ──► Channel ──► Background workers ──► each handler in its own DI scope
                │                                  │
                │                                  ├─ all succeeded ──► Complete (remove)
                │                                  └─ a handler failed ──► Fail (retry with backoff)
@@ -443,7 +464,8 @@ Highlights:
 - Strongly-typed dispatchers created once per message type and shared across DI scopes
 - Fast path for synchronously completed handlers
 - Pooled task arrays for multi-handler fan-out
-- Exponential retry with precomputed delays
+- Exponential retry per failed handler, capped so it can't overflow
+- A hosted service starts the publisher with the app (recovering stored notifications) and drains it on shutdown
 
 ## Benchmarks
 
@@ -451,11 +473,13 @@ Dispatch overhead measured with BenchmarkDotNet on .NET 10, x64 Linux:
 
 | Scenario | Time | Allocated |
 |---|---|---|
-| Request | 64 ns | 64 B |
-| Command (request without a response) | 58 ns | 64 B |
-| Request + 1 pipeline behavior | 130 ns | 288 B |
-| New DI scope + request | 174 ns | 232 B |
-| New DI scope + async handler (awaits) + 1 behavior | 2.17 µs | 672 B |
+| Request | 52 ns | 24 B |
+| Command (request without a response) | 55 ns | 24 B |
+| Request + 1 pipeline behavior | 119 ns | 288 B |
+| New DI scope + request | 123 ns | 192 B |
+| New DI scope + async handler (awaits) + 1 behavior | 2.06 µs | 672 B |
+
+The 24 bytes of a plain request are the transient handler itself: with a singleton handler, dispatch allocates nothing. A background notification with one handler allocates about 216 bytes, from publish to handler.
 
 The last row is closest to a real web request (new scope, a handler that awaits, one behavior); most of that time is the handler's own async work. Numbers vary per machine; run the benchmarks yourself:
 

@@ -89,7 +89,22 @@ public class MediatorHandlerGeneratorTests
     }
 
     [Fact]
-    public void Open_generic_behavior_reports_MEDGEN003_and_is_skipped()
+    public void Open_generic_handler_reports_MEDGEN003_and_is_skipped()
+    {
+        var (_, diagnostics, generated) = Run(Messages + """
+
+            public sealed class AuditAll<TNotification> : INotificationHandler<TNotification> where TNotification : INotification
+            {
+                public Task Handle(TNotification notification, CancellationToken cancellationToken) => Task.CompletedTask;
+            }
+            """);
+
+        diagnostics.Should().ContainSingle(d => d.Id == "MEDGEN003");
+        generated.Should().NotContain("AuditAll");
+    }
+
+    [Fact]
+    public void Unlisted_open_generic_stream_behavior_reports_MEDGEN007_and_is_skipped()
     {
         var (_, diagnostics, generated) = Run(Messages + """
 
@@ -100,7 +115,7 @@ public class MediatorHandlerGeneratorTests
             }
             """);
 
-        diagnostics.Should().ContainSingle(d => d.Id == "MEDGEN003");
+        diagnostics.Should().ContainSingle(d => d.Id == "MEDGEN007");
         generated.Should().NotContain("Logging");
     }
 
@@ -262,7 +277,7 @@ public class MediatorHandlerGeneratorTests
     }
 
     [Fact]
-    public void Unlisted_closed_stream_behavior_is_still_registered_and_reports_MEDGEN007()
+    public void Unlisted_closed_stream_behavior_is_not_registered_and_reports_MEDGEN007()
     {
         var (output, diagnostics, generated) = Run(Messages + """
 
@@ -280,7 +295,8 @@ public class MediatorHandlerGeneratorTests
         output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
         diagnostics.Should().ContainSingle(d => d.Id == "MEDGEN007" && d.Severity == DiagnosticSeverity.Info)
             .Which.GetMessage().Should().Contain("Doubler");
-        Registered(generated, "global::Mediator.IStreamPipelineBehavior<global::App.Count, int>").Should().Equal("global::App.Doubler");
+        Registered(generated, "global::Mediator.IStreamPipelineBehavior<global::App.Count, int>")
+            .Should().BeEmpty("since 4.0 behaviors are registered only when listed in the attribute (or by the app)");
     }
 
     [Fact]

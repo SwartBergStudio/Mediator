@@ -14,7 +14,6 @@ internal enum HandlerKind
     Command,
     Notification,
     StreamRequest,
-    StreamBehavior,
     DeclaredBehavior,
 }
 

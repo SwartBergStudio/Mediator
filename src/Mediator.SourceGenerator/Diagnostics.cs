@@ -58,8 +58,8 @@ internal static class Diagnostics
 
     public static readonly DiagnosticDescriptor UndeclaredStreamBehavior = new(
         id: "MEDGEN007",
-        title: "Stream behavior is registered automatically, in no defined order",
-        messageFormat: "Stream behavior '{0}' is registered automatically, in no defined order; list it in [assembly: MediatorPipelineBehaviors(...)] to set its order. Automatic registration of stream behaviors is removed in the next major version.",
+        title: "Stream behavior is not listed in MediatorPipelineBehaviors",
+        messageFormat: "Stream behavior '{0}' is not registered automatically (since 4.0); list it in [assembly: MediatorPipelineBehaviors(...)], or register it yourself and suppress MEDGEN007",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true);

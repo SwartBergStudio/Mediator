@@ -23,12 +23,20 @@ namespace Mediator
         Task Send(IRequest request, CancellationToken cancellationToken = default);
         
         /// <summary>
-        /// Publishes a notification for background processing: the returned task completes once the notification is
-        /// queued (and persisted, when persistence is enabled). Handlers run later, in their own DI scope.
+        /// Publishes a notification for background processing (fire and forget): the returned task completes once the
+        /// notification is queued (and persisted, when persistence is enabled). Handlers run later on background workers,
+        /// never on the caller's thread, each in a DI scope of its own.
         /// </summary>
+        /// <remarks>
+        /// The caller never waits for a handler, never sees a handler's exception (failures are logged, and retried when
+        /// persistence is enabled), and does not share its DI scope or transaction with them. Put what handlers need, such
+        /// as ids and the user id, in the notification. Several handlers of one notification run at the same time, in no
+        /// guaranteed order. Use <see cref="PublishAndWait{TNotification}"/> when the work must succeed or fail with the
+        /// caller. Unlike MediatR's <c>Publish</c>, this does not await the handlers.
+        /// </remarks>
         /// <typeparam name="TNotification">The notification type.</typeparam>
         /// <param name="notification">The notification to publish.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <param name="cancellationToken">Cancels persisting the notification and waiting for room in a full queue; it is not passed to the handlers.</param>
         /// <returns>A task that completes when the notification is queued.</returns>
         Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default) where TNotification : INotification;
 

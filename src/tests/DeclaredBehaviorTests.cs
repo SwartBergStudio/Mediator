@@ -34,10 +34,21 @@ namespace Mediator.Tests
         }
 
         [Fact]
+        public void Scanning_ShouldNotRegisterUnlistedClosedStreamBehaviors()
+        {
+            // Behaviors follow one rule: listed in the attribute, or registered explicitly. Scanning used to register
+            // every closed stream behavior it found, in no defined order (request behaviors never).
+            var services = new ServiceCollection().AddMediator(typeof(DeclaredBehaviorTests).Assembly);
+
+            // Only the listed open behavior applies; TestStreamLoggingBehavior and TestStreamValidationBehavior are not listed.
+            Implementations<IStreamPipelineBehavior<TestStreamRequest, string>>(services)
+                .Should().Equal(typeof(CountingStreamBehavior<TestStreamRequest, string>));
+        }
+
+        [Fact]
         public void Scanning_ShouldRegisterDeclaredClosedStreamBehaviorOnceInItsDeclaredPosition()
         {
-            // Unlisted closed stream behaviors are still registered by scanning (compatibility), but a listed one is
-            // registered only where it is declared: after the open behavior listed before it.
+            // A listed closed stream behavior is registered where it is declared: after the open behavior listed before it.
             var services = new ServiceCollection().AddMediator(typeof(DeclaredBehaviorTests).Assembly);
 
             Implementations<IStreamPipelineBehavior<TestDelayedStreamRequest, int>>(services)

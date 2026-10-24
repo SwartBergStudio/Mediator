@@ -11,10 +11,9 @@ internal static class HandlerRegistrations
 {
     /// <summary>Interfaces whose closed implementations are discovered by assembly scanning.</summary>
     /// <remarks>
-    /// <c>IStreamPipelineBehavior&lt;,&gt;</c> is here for compatibility only: behaviors should be listed in
-    /// <see cref="MediatorPipelineBehaviorsAttribute"/> (or registered explicitly), which gives them a defined order.
-    /// Scanning registers unlisted closed stream behaviors in no defined order, and request behaviors never; the source
-    /// generator reports MEDGEN007 for such stream behaviors. Remove it from this list in the next major version.
+    /// Behaviors are not discovered: scanning can't know the order a pipeline needs, or that a behavior is only meant for
+    /// some environments. They are registered from <see cref="MediatorPipelineBehaviorsAttribute"/>, in the listed order,
+    /// or explicitly by the app.
     /// </remarks>
     private static readonly Type[] s_handlerInterfaces =
     {
@@ -22,7 +21,6 @@ internal static class HandlerRegistrations
         typeof(IRequestHandler<>),
         typeof(INotificationHandler<>),
         typeof(IStreamRequestHandler<,>),
-        typeof(IStreamPipelineBehavior<,>),
     };
 
     /// <summary>
@@ -67,12 +65,9 @@ internal static class HandlerRegistrations
                 if (!type.IsClass || type.IsAbstract || type.ContainsGenericParameters)
                     continue;
 
-                // Declared behaviors are registered by RegisterDeclaredBehaviors below, in their declared order.
-                var declared = Array.IndexOf(declaredBehaviors, type) >= 0;
-
                 foreach (var interfaceType in type.GetInterfaces())
                 {
-                    if (!IsHandlerInterface(interfaceType) || declared && IsBehaviorInterface(interfaceType))
+                    if (!IsHandlerInterface(interfaceType))
                         continue;
 
                     if (IsClosed(interfaceType, typeof(IRequestHandler<,>)) ||

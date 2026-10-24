@@ -308,37 +308,42 @@ namespace Mediator.Persistence
         /// <inheritdoc />
         public async Task CleanupAsync(DateTime olderThan, CancellationToken cancellationToken = default)
         {
-            await _semaphore.WaitAsync(cancellationToken);
-            try
-            {
-                if (!Directory.Exists(_directory))
-                    return;
+            if (!Directory.Exists(_directory))
+                return;
 
-                // Includes *.json.tmp left behind when a process stopped between writing a file and renaming it;
-                // nothing else ever removes them. Safe: writes happen under the same lock.
-                var files = System.Linq.Enumerable.Concat(Directory.EnumerateFiles(_directory, "*.json"),
-                    Directory.EnumerateFiles(_directory, "*.json.tmp"));
+            // Includes *.json.tmp left behind when a process stopped between writing a file and renaming it; nothing
+            // else ever removes them.
+            var files = System.Linq.Enumerable.Concat(Directory.EnumerateFiles(_directory, "*.json"),
+                Directory.EnumerateFiles(_directory, "*.json.tmp"));
 
-                await Parallel.ForEachAsync(files, 
-                    new ParallelOptions 
-                    { 
-                        CancellationToken = cancellationToken, 
-                        MaxDegreeOfParallelism = Environment.ProcessorCount 
-                    },
-                    (filePath, ct) =>
+            // Locked per file, only to delete, not for the whole pass: every PersistAsync (every Publish) takes the same
+            // lock, and waited for the whole directory to be checked.
+            await Parallel.ForEachAsync(files,
+                new ParallelOptions
+                {
+                    CancellationToken = cancellationToken,
+                    MaxDegreeOfParallelism = Environment.ProcessorCount
+                },
+                async (filePath, ct) =>
+                {
+                    if (!IsOlderThan(filePath, olderThan))
+                        return;
+
+                    await _semaphore.WaitAsync(ct);
+                    try
                     {
-                        if (File.Exists(filePath) && File.GetCreationTimeUtc(filePath) < olderThan)
-                        {
+                        if (IsOlderThan(filePath, olderThan))
                             SafeDeleteFile(filePath);
-                        }
-                        return ValueTask.CompletedTask;
-                    });
-            }
-            finally
-            {
-                _semaphore.Release();
-            }
+                    }
+                    finally
+                    {
+                        _semaphore.Release();
+                    }
+                });
         }
+
+        private static bool IsOlderThan(string filePath, DateTime olderThan)
+            => File.Exists(filePath) && File.GetCreationTimeUtc(filePath) < olderThan;
 
         /// <summary>
         /// Writes a persisted record. The layout matches the camelCase JSON produced by earlier versions,
