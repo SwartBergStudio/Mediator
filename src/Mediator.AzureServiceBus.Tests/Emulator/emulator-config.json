@@ -1,0 +1,36 @@
+{
+  "UserConfig": {
+    "Namespaces": [
+      {
+        "Name": "sbemulatorns",
+        "Queues": [
+          { "Name": "handle", "Properties": { "DeadLetteringOnMessageExpiration": false, "DefaultMessageTimeToLive": "PT1H", "DuplicateDetectionHistoryTimeWindow": "PT20S", "ForwardDeadLetteredMessagesTo": "", "ForwardTo": "", "LockDuration": "PT30S", "MaxDeliveryCount": 10, "RequiresDuplicateDetection": false, "RequiresSession": false } },
+          { "Name": "retry", "Properties": { "DeadLetteringOnMessageExpiration": false, "DefaultMessageTimeToLive": "PT1H", "DuplicateDetectionHistoryTimeWindow": "PT20S", "ForwardDeadLetteredMessagesTo": "", "ForwardTo": "", "LockDuration": "PT30S", "MaxDeliveryCount": 10, "RequiresDuplicateDetection": false, "RequiresSession": false } },
+          { "Name": "dead-letter", "Properties": { "DeadLetteringOnMessageExpiration": false, "DefaultMessageTimeToLive": "PT1H", "DuplicateDetectionHistoryTimeWindow": "PT20S", "ForwardDeadLetteredMessagesTo": "", "ForwardTo": "", "LockDuration": "PT30S", "MaxDeliveryCount": 10, "RequiresDuplicateDetection": false, "RequiresSession": false } },
+          { "Name": "poison", "Properties": { "DeadLetteringOnMessageExpiration": false, "DefaultMessageTimeToLive": "PT1H", "DuplicateDetectionHistoryTimeWindow": "PT20S", "ForwardDeadLetteredMessagesTo": "", "ForwardTo": "", "LockDuration": "PT30S", "MaxDeliveryCount": 10, "RequiresDuplicateDetection": false, "RequiresSession": false } },
+          { "Name": "unknown-type", "Properties": { "DeadLetteringOnMessageExpiration": false, "DefaultMessageTimeToLive": "PT1H", "DuplicateDetectionHistoryTimeWindow": "PT20S", "ForwardDeadLetteredMessagesTo": "", "ForwardTo": "", "LockDuration": "PT30S", "MaxDeliveryCount": 10, "RequiresDuplicateDetection": false, "RequiresSession": false } }
+        ],
+        "Topics": [
+          {
+            "Name": "events",
+            "Properties": { "DefaultMessageTimeToLive": "PT1H", "DuplicateDetectionHistoryTimeWindow": "PT20S", "RequiresDuplicateDetection": false },
+            "Subscriptions": [
+              {
+                "Name": "billing",
+                "Properties": { "DeadLetteringOnMessageExpiration": false, "DefaultMessageTimeToLive": "PT1H", "LockDuration": "PT30S", "MaxDeliveryCount": 10, "ForwardDeadLetteredMessagesTo": "", "ForwardTo": "", "RequiresSession": false },
+                "Rules": [
+                  { "Name": "own-retries-only", "Properties": { "FilterType": "Sql", "SqlFilter": { "SqlExpression": "[mediator-subscription] IS NULL OR [mediator-subscription] = 'billing'" } } }
+                ]
+              },
+              {
+                "Name": "shipping",
+                "Properties": { "DeadLetteringOnMessageExpiration": false, "DefaultMessageTimeToLive": "PT1H", "LockDuration": "PT30S", "MaxDeliveryCount": 10, "ForwardDeadLetteredMessagesTo": "", "ForwardTo": "", "RequiresSession": false }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "Logging": { "Type": "File" }
+  }
+}

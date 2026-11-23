@@ -571,7 +571,7 @@ The suites, all run by CI on every push and pull request:
 | `src/tests` | Library behavior, on .NET 8, 9, 10 and 11 |
 | `src/tests-aot` | The **same** tests again with dynamic code disabled (Native AOT semantics) and typed dispatchers coming only from the source generator. Any message type the generator misses fails here. |
 | `src/generator-tests` | Generator output and diagnostics: constraints, ordering, accessibility and invalid declarations |
-| `src/Mediator.AzureServiceBus.Tests` | How received Service Bus messages are settled (complete, per-handler retry, dead-letter, abandon), message mapping and registration; plus an integration test against a real namespace or the emulator when `SERVICEBUS_CONNECTION` is set |
+| `src/Mediator.AzureServiceBus.Tests` | How received Service Bus messages are settled (complete, per-handler retry, dead-letter, abandon), message mapping and registration; plus end-to-end tests against the Service Bus emulator in Docker (Testcontainers): handling, scheduled per-handler retries, dead-lettering and topic subscriptions |
 | `samples/Mediator.AotSample` | Published with **Native AOT** (warnings as errors) and run. It covers requests, value-type responses, open generic and stream behaviors, commands, streams, exceptions, notifications and persistence recovery. |
 | Package validation | Packing fails if a public API changed incompatibly since the last release |
 

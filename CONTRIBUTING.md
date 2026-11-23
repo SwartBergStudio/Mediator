@@ -27,7 +27,7 @@ The solution contains:
 | `src/tests` | Library tests (.NET 8, 9, 10 and 11) |
 | `src/tests-aot` | The same tests with dynamic code disabled and generated dispatchers only (Native AOT semantics) |
 | `src/generator-tests` | Generator and analyzer tests |
-| `src/Mediator.AzureServiceBus.Tests` | Transport tests. The Service Bus integration test runs when `SERVICEBUS_CONNECTION` is set (optionally `SERVICEBUS_QUEUE`, default `mediator-tests`) |
+| `src/Mediator.AzureServiceBus.Tests` | Transport tests. The end-to-end tests in `Emulator/` start the Service Bus emulator with Testcontainers, so they need Docker (they are skipped without it; CI requires them). They run on net11.0 only |
 | `samples/Mediator.AotSample` | Native AOT end-to-end check |
 | `src/benchmarks` | BenchmarkDotNet benchmarks |
 

@@ -24,6 +24,8 @@ jobs:
 
     env:
       REDIS_CONNECTION: localhost:6379
+      # The Service Bus emulator tests (Testcontainers) must run here: without Docker they fail instead of skipping.
+      REQUIRE_CONTAINER_TESTS: "true"
     
     steps:
     - name: Checkout code
