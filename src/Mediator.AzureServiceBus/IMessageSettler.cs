@@ -23,6 +23,9 @@ internal sealed class ProcessMessageEventArgsSettler(ProcessMessageEventArgs arg
     public Task AbandonAsync(CancellationToken cancellationToken)
         => args.AbandonMessageAsync(args.Message, propertiesToModify: null, cancellationToken);
 
+    // The overload with propertiesToModify throws ArgumentNullException for null, so without properties use the other one.
     public Task DeadLetterAsync(string reason, string description, IDictionary<string, object>? propertiesToModify, CancellationToken cancellationToken)
-        => args.DeadLetterMessageAsync(args.Message, propertiesToModify, reason, description, cancellationToken);
+        => propertiesToModify == null
+            ? args.DeadLetterMessageAsync(args.Message, reason, description, cancellationToken)
+            : args.DeadLetterMessageAsync(args.Message, propertiesToModify, reason, description, cancellationToken);
 }
