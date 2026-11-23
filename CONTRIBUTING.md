@@ -23,9 +23,11 @@ The solution contains:
 |---|---|
 | `src/Mediator` | The library (`SwartBerg.Mediator`) |
 | `src/Mediator.SourceGenerator` | Source generator and analyzer (`SwartBerg.Mediator.SourceGenerator`) |
+| `src/Mediator.AzureServiceBus` | Azure Service Bus transport (`SwartBerg.Mediator.AzureServiceBus`) |
 | `src/tests` | Library tests (.NET 8, 9, 10 and 11) |
 | `src/tests-aot` | The same tests with dynamic code disabled and generated dispatchers only (Native AOT semantics) |
 | `src/generator-tests` | Generator and analyzer tests |
+| `src/Mediator.AzureServiceBus.Tests` | Transport tests. The Service Bus integration test runs when `SERVICEBUS_CONNECTION` is set (optionally `SERVICEBUS_QUEUE`, default `mediator-tests`) |
 | `samples/Mediator.AotSample` | Native AOT end-to-end check |
 | `src/benchmarks` | BenchmarkDotNet benchmarks |
 

@@ -1,10 +1,17 @@
 # Changelog
 
-All notable changes to SwartBerg.Mediator and SwartBerg.Mediator.SourceGenerator. Versions follow [Semantic Versioning](https://semver.org/); release dates and packages are on the [Releases](https://github.com/SwartBergStudio/Mediator/releases) page.
+All notable changes to SwartBerg.Mediator, SwartBerg.Mediator.SourceGenerator and SwartBerg.Mediator.AzureServiceBus. Versions follow [Semantic Versioning](https://semver.org/); release dates and packages are on the [Releases](https://github.com/SwartBergStudio/Mediator/releases) page.
 
 ## Unreleased
 
 ### Added
+- **Azure Service Bus transport (new package `SwartBerg.Mediator.AzureServiceBus`).** `AddMediatorAzureServiceBus(...)` makes `Publish` send notifications to a Service Bus queue or topic. A hosted processor receives them and runs the handlers. A failed handler is retried alone, through a scheduled message with the usual backoff. Once `MaxRetryAttempts` is reached, the message is dead-lettered with the failed handlers named, rather than dropped. Poison messages are dead-lettered at once. See the README section "Notifications over a message broker".
+- **A transport seam for message brokers**, in the core package:
+  - `INotificationTransport`, registered with `AddNotificationTransport<T>()`, replaces the in-process queue on the publishing side.
+  - `INotificationDispatcher` runs the handlers of a received `NotificationEnvelope` on the consuming side.
+  - Handlers get the same per-handler DI scopes, targeted retries and telemetry as background notifications.
+  - With a transport, `Publish` completes when the broker accepted the message, and throws when it did not.
+  - Existing apps are unaffected: without a transport, nothing changes.
 - **.NET 11.** The library ships a `net11.0` build next to `net8.0`, `net9.0` and `net10.0`, and the tests run on all four. Its `Microsoft.Extensions.*` dependencies stay at 8.0.0, so apps on older frameworks are not pushed onto newer packages. CI runs on the pinned `ubuntu-26.04` image.
 
 ## 4.0.0

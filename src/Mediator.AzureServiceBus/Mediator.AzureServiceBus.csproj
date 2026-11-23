@@ -1,0 +1,62 @@
+<!-- TreatAsLocalProperty: the release workflow passes the core package's PackageValidationBaselineVersion to the whole
+     solution, and this package has no release of that version to download. -->
+<Project Sdk="Microsoft.NET.Sdk" TreatAsLocalProperty="PackageValidationBaselineVersion">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0;net11.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Mediator.AzureServiceBus</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <!-- First release: no baseline yet. Set PackageValidationBaselineVersion to the first published version afterwards. -->
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion></PackageValidationBaselineVersion>
+
+    <!-- Versioning: set by the Release workflow from git tags, like SwartBerg.Mediator. -->
+    <Version>0.0.0-dev</Version>
+    <AssemblyVersion>0.0.0.0</AssemblyVersion>
+    <FileVersion>0.0.0.0</FileVersion>
+
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <PackageId>SwartBerg.Mediator.AzureServiceBus</PackageId>
+    <Authors>SwartBerg Studio</Authors>
+    <Company>SwartBerg Studio</Company>
+    <Product>SwartBerg.Mediator</Product>
+    <Description>Azure Service Bus transport for SwartBerg.Mediator: IMediator.Publish sends notifications to a Service Bus queue or topic, and a hosted processor runs their handlers, with per-handler retries (scheduled messages with backoff) and dead-lettering.</Description>
+    <PackageTags>mediator;notification;azure;service-bus;servicebus;messaging;background-processing;native-aot</PackageTags>
+    <PackageProjectUrl>https://github.com/SwartBergStudio/Mediator</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/SwartBergStudio/Mediator.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReleaseNotes>See https://github.com/SwartBergStudio/Mediator/releases</PackageReleaseNotes>
+    <Copyright>Copyright © SwartBerg Studio 2026</Copyright>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.21.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Mediator\Mediator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Mediator.AzureServiceBus.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\..\assets\icon-128.png" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
+
+</Project>

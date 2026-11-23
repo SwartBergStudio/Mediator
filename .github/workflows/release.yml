@@ -93,6 +93,11 @@ jobs:
           -p:EnablePackageValidation=${{ inputs.version_bump != 'major' && steps.version.outputs.previous_tag != '' }}
         dotnet pack src/Mediator.SourceGenerator/Mediator.SourceGenerator.csproj --no-build --configuration Release --output ./packages \
           -p:Version=${{ steps.version.outputs.version }}
+        # Depends on SwartBerg.Mediator of the same version. Its own validation baseline lives in its csproj.
+        dotnet pack src/Mediator.AzureServiceBus/Mediator.AzureServiceBus.csproj --no-build --configuration Release --output ./packages \
+          -p:Version=${{ steps.version.outputs.version }} \
+          -p:AssemblyVersion=${{ steps.version.outputs.version }}.0 \
+          -p:FileVersion=${{ steps.version.outputs.version }}.0
 
     # Runs after packing: publishing the sample rebuilds the library, and the packages must contain the
     # assemblies from the versioned Build step. The same version properties keep the rebuild identical anyway.
@@ -125,7 +130,7 @@ jobs:
         body: |
           ## SwartBerg.Mediator v${{ steps.version.outputs.version }}
           
-          High-performance mediator for .NET 8, 9 and 10 with streaming requests, background notification processing, crash-safe persistence and Native AOT support.
+          High-performance mediator for .NET 8, 9, 10 and 11 with streaming requests, background notification processing, crash-safe persistence, an Azure Service Bus transport and Native AOT support.
           
           ### Key Features
           - Strongly-typed dispatch with no per-call reflection
@@ -139,6 +144,8 @@ jobs:
           dotnet add package SwartBerg.Mediator --version ${{ steps.version.outputs.version }}
           # Optional, for Native AOT / trimmed apps:
           dotnet add package SwartBerg.Mediator.SourceGenerator --version ${{ steps.version.outputs.version }}
+          # Optional, to publish notifications through Azure Service Bus:
+          dotnet add package SwartBerg.Mediator.AzureServiceBus --version ${{ steps.version.outputs.version }}
           ```
           
           ### What's changed

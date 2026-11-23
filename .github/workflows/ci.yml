@@ -81,6 +81,10 @@ jobs:
           dotnet pack src/Mediator/Mediator.csproj --configuration Release --output ./packages-ci \
             -p:Version=999.0.0-ci -p:AssemblyVersion=999.0.0.0 -p:PackageValidationBaselineVersion=$baseline
         fi
+        # The Azure Service Bus package validates against its own baseline (none until its first release), even when
+        # the core package's baseline is passed in, as the release workflow does.
+        dotnet pack src/Mediator.AzureServiceBus/Mediator.AzureServiceBus.csproj --configuration Release --output ./packages-ci \
+          -p:Version=999.0.0-ci -p:AssemblyVersion=999.0.0.0 -p:PackageValidationBaselineVersion=$baseline
 
     # A .NET 8 app, built with the .NET 8 SDK, against the packages from this commit. Catches what the latest-SDK
     # build above can't: a source generator that needs a newer compiler, or library dependencies that force newer
