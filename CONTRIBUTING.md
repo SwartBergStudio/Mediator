@@ -10,7 +10,7 @@ Thanks for helping. Bug reports, fixes, docs and features are all welcome.
 
 ## Building and testing
 
-You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). To run the tests on every supported framework, also install the .NET 8 and .NET 9 runtimes.
+You need the [.NET 11 SDK](https://dotnet.microsoft.com/download). To run the tests on every supported framework, also install the .NET 8, 9 and 10 runtimes.
 
 ```bash
 dotnet build -c Release
@@ -23,9 +23,11 @@ The solution contains:
 |---|---|
 | `src/Mediator` | The library (`SwartBerg.Mediator`) |
 | `src/Mediator.SourceGenerator` | Source generator and analyzer (`SwartBerg.Mediator.SourceGenerator`) |
-| `src/tests` | Library tests (.NET 8, 9 and 10) |
+| `src/Mediator.AzureServiceBus` | Azure Service Bus transport (`SwartBerg.Mediator.AzureServiceBus`) |
+| `src/tests` | Library tests (.NET 8, 9, 10 and 11) |
 | `src/tests-aot` | The same tests with dynamic code disabled and generated dispatchers only (Native AOT semantics) |
 | `src/generator-tests` | Generator and analyzer tests |
+| `src/Mediator.AzureServiceBus.Tests` | Transport tests. The end-to-end tests in `Emulator/` start the Service Bus emulator with Testcontainers, so they need Docker (they are skipped without it; CI requires them). They run on net11.0 only |
 | `samples/Mediator.AotSample` | Native AOT end-to-end check |
 | `src/benchmarks` | BenchmarkDotNet benchmarks |
 
@@ -50,7 +52,7 @@ dotnet run -c Release -- --filter *DispatchBenchmarks*
 3. **Keep the public API compatible.** CI packs the library with package validation against the latest release and fails on breaking changes. Breaking changes need an issue and a major version.
 4. **Keep it Native AOT compatible.** The library builds with `IsAotCompatible`, and the AOT sample builds with warnings as errors.
 5. **Update the docs.** Update `README.md` for user-facing changes, and add an entry under the unreleased section of `CHANGELOG.md`.
-6. **Pass CI.** CI runs the tests on .NET 8, 9 and 10, runs the Native AOT sample, reports coverage, and validates the API.
+6. **Pass CI.** CI runs the tests on .NET 8, 9, 10 and 11, runs the Native AOT sample, reports coverage, and validates the API.
 
 ### Writing tests
 

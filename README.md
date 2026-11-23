@@ -9,7 +9,7 @@
 [![NuGet Downloads](https://img.shields.io/nuget/dt/SwartBerg.Mediator.svg)](https://www.nuget.org/packages/SwartBerg.Mediator/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A fast mediator for .NET 8, 9 and 10. It supports requests, commands, streaming, pipeline behaviors, background notification processing and crash-safe notification persistence, and runs under Native AOT.
+A fast mediator for .NET 8, 9, 10 and 11. It supports requests, commands, streaming, pipeline behaviors, background notification processing and crash-safe notification persistence, and runs under Native AOT.
 
 When MediatR moved to a paid license, I built my own mediator using the same familiar interfaces, so it feels at home if you've used MediatR. It is free and adds built-in background processing, notification persistence and Native AOT support.
 
@@ -25,6 +25,7 @@ See [CHANGELOG.md](https://github.com/SwartBergStudio/Mediator/blob/main/CHANGEL
 - **Notifications your way**: background processing with a worker pool (`Publish`), or awaited in the caller's scope (`PublishAndWait`)
 - **Pipeline behaviors**: plug-in cross-cutting concerns for requests, requests without a response, and streams
 - **Configurable persistence**: pluggable store and serializer; only failed handlers are retried, with exponential backoff
+- **Message broker transports**: publish notifications through Azure Service Bus (or your own transport) instead of the in-process queue ([details](#notifications-over-a-message-broker-azure-service-bus))
 - **Observability**: OpenTelemetry-ready traces and metrics, with no overhead when not collected
 - **UI-safe async**: no extra awaits on the request path, and `ConfigureAwait(false)` on the mediator's own background awaits (see [Scopes, Blazor and ConfigureAwait](#scopes-blazor-and-configureawait))
 - **Lightweight**: low allocations, minimal dependencies
@@ -35,12 +36,13 @@ See [CHANGELOG.md](https://github.com/SwartBergStudio/Mediator/blob/main/CHANGEL
 |---|---|
 | [`SwartBerg.Mediator`](https://www.nuget.org/packages/SwartBerg.Mediator/) | The mediator. Required. |
 | [`SwartBerg.Mediator.SourceGenerator`](https://www.nuget.org/packages/SwartBerg.Mediator.SourceGenerator/) | Optional. Compile-time handler registration for Native AOT / trimmed apps (or simply faster startup). |
+| [`SwartBerg.Mediator.AzureServiceBus`](https://www.nuget.org/packages/SwartBerg.Mediator.AzureServiceBus/) | Optional. Publishes notifications through Azure Service Bus queues or topics. |
 
-Both packages are released together with the same version number. The current version is shown on the badges above.
+All packages are released together with the same version number. The current version is shown on the badges above.
 
 ## Requirements
 
-- .NET 8, 9 or 10
+- .NET 8, 9, 10 or 11
 - Works with ASP.NET Core, Blazor (Server, WebAssembly, Auto), .NET MAUI, console, WPF and WinForms applications
 
 ## Installation
@@ -50,6 +52,9 @@ dotnet add package SwartBerg.Mediator
 
 # Optional: Native AOT / trimming support
 dotnet add package SwartBerg.Mediator.SourceGenerator
+
+# Optional: publish notifications through Azure Service Bus
+dotnet add package SwartBerg.Mediator.AzureServiceBus
 ```
 
 `dotnet add package` installs the latest version. To pin a version in the project file, use the version from the badge above:
@@ -318,6 +323,65 @@ A custom `INotificationPersistence` should:
 - **Store `NotificationWorkItem.TargetHandlerType`** and return it along with the other fields. That's how a retry knows which single handler to run. If it isn't stored, retries still work, but run all of the notification's handlers again.
 - **Optionally implement `INotificationRetryPersistence`.** This saves a retry item together with its retry time in one step. It's recommended when several app instances share the store, so no instance sees a retry item as ready too early.
 
+## Notifications over a message broker (Azure Service Bus)
+
+By default `Publish` queues notifications in memory, and this app's background workers handle them. With a transport, `Publish` sends each notification to a message broker instead. The handlers then run wherever the broker delivers it: in this app, in other instances of it, or in other services. The handlers stay the same; only the registration changes.
+
+```bash
+dotnet add package SwartBerg.Mediator.AzureServiceBus
+```
+
+```csharp
+builder.Services.AddMediator(options =>
+{
+    options.MaxRetryAttempts = 5;                        // then the message is dead-lettered
+    options.InitialRetryDelay = TimeSpan.FromSeconds(30); // retry delay: 30s, 60s, 120s, ...
+}, typeof(Program).Assembly);
+
+builder.Services.AddMediatorAzureServiceBus(options =>
+{
+    // Managed identity (Azure.Identity); or set ConnectionString, or ClientFactory to reuse your own ServiceBusClient.
+    options.FullyQualifiedNamespace = "contoso.servicebus.windows.net";
+    options.Credential = new DefaultAzureCredential();
+    options.EntityPath = "notifications";                // a queue, or a topic...
+    // options.SubscriptionName = "billing";             // ...with this app's subscription
+});
+```
+
+**Publishing**
+- `Publish` completes once Service Bus has accepted the message.
+- If Service Bus rejects it, `Publish` throws. A notification that isn't stored is never reported as published.
+- Apps that only publish set `EnableProcessor = false`.
+
+**Handling.** A hosted processor receives messages and runs the handlers exactly as background notifications run: concurrently, each in its own DI scope, with the same spans and metrics. Then it settles the message:
+
+| Outcome | What happens to the message |
+|---|---|
+| Every handler succeeded | Completed. |
+| Some handlers failed | One retry message per failed handler, scheduled with backoff, so handlers that succeeded don't run again. Then the original is completed. |
+| Every handler failed, or none could run | One retry of the whole message, scheduled with backoff. |
+| `MaxRetryAttempts` reached | Dead-lettered with reason `MediatorMaxRetriesExceeded`. The failed handlers are named in the `mediator-failed-handlers` property, and the message can be inspected and resubmitted. |
+| Unknown type, unreadable payload, or not a mediator message | Dead-lettered at once (`MediatorPoisonMessage` / `MediatorInvalidMessage`). A retry can't help. |
+| The retry couldn't be sent, or handling threw | Abandoned. Service Bus delivers the message again, and dead-letters it after the entity's MaxDeliveryCount. |
+
+Delivery is **at least once**. If the app stops between sending a retry and completing the original, a handler can run twice, so handlers should be idempotent. On shutdown the processor waits up to `ShutdownTimeout` for running handlers. Unfinished messages are delivered again when their lock expires.
+
+**Topics.**
+- Give each service that handles the notifications a subscription of its own.
+- Retries are sent to the topic, marked for the subscription that failed (`mediator-subscription`). Other subscriptions complete them without running anything.
+- To keep retry traffic away from those other subscriptions, give each subscription the SQL filter `[mediator-subscription] IS NULL OR [mediator-subscription] = '<its name>'`.
+- The message `Subject` is the notification's type name, so subscriptions can also filter by notification.
+
+**Serialization.**
+- Notifications are serialized with the registered `INotificationSerializer`, which is JSON by default.
+- For Native AOT, register a `JsonNotificationSerializer` built from a source-generated `JsonSerializerContext` first, as for persistence. See [Persistence under Native AOT](#persistence-under-native-aot).
+- `EnablePersistence` doesn't apply with a transport, because the broker stores the notifications.
+
+**Other brokers.** Azure Service Bus is one implementation of a small seam in the core package, and you can build others the same way:
+- `INotificationTransport` sends a `NotificationEnvelope`: the payload plus type, target handler, attempt count, `NotBefore` and trace context.
+- Register it with `services.AddNotificationTransport<MyTransport>()`.
+- Your consumer passes received envelopes to `INotificationDispatcher.DispatchAsync`. The result tells it how to settle the message: succeeded, failed handlers to retry, or poison.
+
 ## Native AOT and Trimming
 
 `AddMediator(assemblies)` discovers handlers with reflection. Trimming can remove handlers it never sees referenced, so in trimmed or Native AOT apps (for example published MAUI iOS/Android apps or Native AOT APIs) use the source generator instead:
@@ -458,6 +522,14 @@ Publish ──► [Persist] ──► Channel ──► Background workers ─�
                │                                  ├─ all succeeded ──► Complete (remove)
                │                                  └─ a handler failed ──► Fail (retry with backoff)
                └─◄── Recovery loop (pending items after restart / due retries)
+
+With a transport (AddNotificationTransport / AddMediatorAzureServiceBus):
+
+Publish ──► INotificationTransport ──► broker ──► consumer ──► INotificationDispatcher ──► each handler in its own DI scope
+                                         ▲                                 │
+                                         │                                 ├─ all succeeded ──► complete
+                                         └── scheduled retry per failed ◄──┤
+                                             handler (backoff)             └─ poison / out of attempts ──► dead-letter
 ```
 
 Highlights:
@@ -499,9 +571,10 @@ The suites, all run by CI on every push and pull request:
 
 | Suite | What it covers |
 |---|---|
-| `src/tests` | Library behavior, on .NET 8, 9 and 10 |
+| `src/tests` | Library behavior, on .NET 8, 9, 10 and 11 |
 | `src/tests-aot` | The **same** tests again with dynamic code disabled (Native AOT semantics) and typed dispatchers coming only from the source generator. Any message type the generator misses fails here. |
 | `src/generator-tests` | Generator output and diagnostics: constraints, ordering, accessibility and invalid declarations |
+| `src/Mediator.AzureServiceBus.Tests` | How received Service Bus messages are settled (complete, per-handler retry, dead-letter, abandon), message mapping and registration; plus end-to-end tests against the Service Bus emulator in Docker (Testcontainers): handling, scheduled per-handler retries, dead-lettering and topic subscriptions |
 | `samples/Mediator.AotSample` | Published with **Native AOT** (warnings as errors) and run. It covers requests, value-type responses, open generic and stream behaviors, commands, streams, exceptions, notifications and persistence recovery. |
 | Package validation | Packing fails if a public API changed incompatibly since the last release |
 

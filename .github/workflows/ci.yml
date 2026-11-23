@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     # Redis for the persistence sample tests (they are skipped when no server is reachable).
     services:
@@ -24,6 +24,8 @@ jobs:
 
     env:
       REDIS_CONNECTION: localhost:6379
+      # The Service Bus emulator tests (Testcontainers) must run here: without Docker they fail instead of skipping.
+      REQUIRE_CONTAINER_TESTS: "true"
     
     steps:
     - name: Checkout code
@@ -39,6 +41,7 @@ jobs:
           8.0.x
           9.0.x
           10.0.x
+          11.0.x
         
     - name: Restore dependencies
       run: dotnet restore
@@ -65,6 +68,8 @@ jobs:
 
     - name: Native AOT smoke test
       run: |
+        # Native AOT links against zlib. The image has it today; installing it keeps the step independent of the image contents.
+        sudo apt-get update && sudo apt-get install -y --no-install-recommends zlib1g-dev
         dotnet publish samples/Mediator.AotSample --configuration Release -r linux-x64 -o ./aot-sample
         ./aot-sample/Mediator.AotSample
 
@@ -78,6 +83,10 @@ jobs:
           dotnet pack src/Mediator/Mediator.csproj --configuration Release --output ./packages-ci \
             -p:Version=999.0.0-ci -p:AssemblyVersion=999.0.0.0 -p:PackageValidationBaselineVersion=$baseline
         fi
+        # The Azure Service Bus package validates against its own baseline (none until its first release), even when
+        # the core package's baseline is passed in, as the release workflow does.
+        dotnet pack src/Mediator.AzureServiceBus/Mediator.AzureServiceBus.csproj --configuration Release --output ./packages-ci \
+          -p:Version=999.0.0-ci -p:AssemblyVersion=999.0.0.0 -p:PackageValidationBaselineVersion=$baseline
 
     # A .NET 8 app, built with the .NET 8 SDK, against the packages from this commit. Catches what the latest-SDK
     # build above can't: a source generator that needs a newer compiler, or library dependencies that force newer
