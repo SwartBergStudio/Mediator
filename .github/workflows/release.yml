@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.ref == 'refs/heads/main'
     
     steps:
@@ -39,6 +39,7 @@ jobs:
           8.0.x
           9.0.x
           10.0.x
+          11.0.x
         
     - name: Determine version
       id: version
@@ -95,6 +96,10 @@ jobs:
 
     # Runs after packing: publishing the sample rebuilds the library, and the packages must contain the
     # assemblies from the versioned Build step. The same version properties keep the rebuild identical anyway.
+    # Native AOT links against zlib; the ubuntu-26.04 image ships clang but not zlib1g-dev.
+    - name: Install Native AOT prerequisites
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zlib1g-dev
+
     - name: Native AOT smoke test
       run: >-
         dotnet publish samples/Mediator.AotSample --configuration Release -r linux-x64 -o ./aot-sample

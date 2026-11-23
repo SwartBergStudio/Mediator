@@ -9,7 +9,7 @@
 [![NuGet Downloads](https://img.shields.io/nuget/dt/SwartBerg.Mediator.svg)](https://www.nuget.org/packages/SwartBerg.Mediator/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A fast mediator for .NET 8, 9 and 10. It supports requests, commands, streaming, pipeline behaviors, background notification processing and crash-safe notification persistence, and runs under Native AOT.
+A fast mediator for .NET 8, 9, 10 and 11. It supports requests, commands, streaming, pipeline behaviors, background notification processing and crash-safe notification persistence, and runs under Native AOT.
 
 When MediatR moved to a paid license, I built my own mediator using the same familiar interfaces, so it feels at home if you've used MediatR. It is free and adds built-in background processing, notification persistence and Native AOT support.
 
@@ -40,7 +40,7 @@ Both packages are released together with the same version number. The current ve
 
 ## Requirements
 
-- .NET 8, 9 or 10
+- .NET 8, 9, 10 or 11
 - Works with ASP.NET Core, Blazor (Server, WebAssembly, Auto), .NET MAUI, console, WPF and WinForms applications
 
 ## Installation
@@ -499,7 +499,7 @@ The suites, all run by CI on every push and pull request:
 
 | Suite | What it covers |
 |---|---|
-| `src/tests` | Library behavior, on .NET 8, 9 and 10 |
+| `src/tests` | Library behavior, on .NET 8, 9, 10 and 11 |
 | `src/tests-aot` | The **same** tests again with dynamic code disabled (Native AOT semantics) and typed dispatchers coming only from the source generator. Any message type the generator misses fails here. |
 | `src/generator-tests` | Generator output and diagnostics: constraints, ordering, accessibility and invalid declarations |
 | `samples/Mediator.AotSample` | Published with **Native AOT** (warnings as errors) and run. It covers requests, value-type responses, open generic and stream behaviors, commands, streams, exceptions, notifications and persistence recovery. |
