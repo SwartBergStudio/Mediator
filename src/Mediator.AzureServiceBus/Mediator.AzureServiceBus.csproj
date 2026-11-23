@@ -1,6 +1,4 @@
-<!-- TreatAsLocalProperty: the release workflow passes the core package's PackageValidationBaselineVersion to the whole
-     solution, and this package has no release of that version to download. -->
-<Project Sdk="Microsoft.NET.Sdk" TreatAsLocalProperty="PackageValidationBaselineVersion">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>net8.0;net9.0;net10.0;net11.0</TargetFrameworks>
@@ -12,9 +10,10 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsAotCompatible>true</IsAotCompatible>
 
-    <!-- First release: no baseline yet. Set PackageValidationBaselineVersion to the first published version afterwards. -->
+    <!-- Fails pack if the public API breaks compatibility with the last release. The workflows pass the latest release
+         tag, as for SwartBerg.Mediator; all packages are released together with the same version. -->
     <EnablePackageValidation>true</EnablePackageValidation>
-    <PackageValidationBaselineVersion></PackageValidationBaselineVersion>
+    <PackageValidationBaselineVersion>4.1.0</PackageValidationBaselineVersion>
 
     <!-- Versioning: set by the Release workflow from git tags, like SwartBerg.Mediator. -->
     <Version>0.0.0-dev</Version>

@@ -8,6 +8,11 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    # Only packages a project references itself. Without this Dependabot "updates" packages a project only gets
+    # transitively by adding a direct reference to them (for example an old Microsoft.CodeAnalysis.Analyzers pinned
+    # into the generator tests). Security updates for vulnerable transitive packages are not affected by this setting.
+    allow:
+      - dependency-type: "direct"
     ignore:
       # Dependabot picks one version per package for the whole repo: the AOT sample's Microsoft.Extensions 10.0.0 ->
       # 10.0.12 counts as a patch, and it then writes 10.0.12 into every project, including the library's 8.0.0.
