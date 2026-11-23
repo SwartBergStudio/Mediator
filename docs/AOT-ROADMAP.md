@@ -61,7 +61,7 @@ declared behavior per request at compile time, checking its generic constraints 
   CI and the Release workflow publish and run it.
 - The generated registrations are tested for equality with reflection scanning (`SourceGeneratedRegistrationTests`).
 - The serializer and file persistence output is pinned byte-for-byte to the earlier format (`PersistenceFormatCompatibilityTests`).
-- `src/tests-aot` runs the full test suite with dynamic code disabled, using only generated dispatchers, on .NET 8, 9 and 10.
+- `src/tests-aot` runs the full test suite with dynamic code disabled, using only generated dispatchers, on .NET 8, 9, 10 and 11.
 - Package validation fails CI and releases on public API breaks compared with the last release.
 
 ## Bugs found and fixed in Phase 1

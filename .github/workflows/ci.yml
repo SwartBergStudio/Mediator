@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     # Redis for the persistence sample tests (they are skipped when no server is reachable).
     services:
@@ -39,6 +39,7 @@ jobs:
           8.0.x
           9.0.x
           10.0.x
+          11.0.x
         
     - name: Restore dependencies
       run: dotnet restore
@@ -65,6 +66,8 @@ jobs:
 
     - name: Native AOT smoke test
       run: |
+        # Native AOT links against zlib; the ubuntu-26.04 image ships clang but not zlib1g-dev.
+        sudo apt-get update && sudo apt-get install -y --no-install-recommends zlib1g-dev
         dotnet publish samples/Mediator.AotSample --configuration Release -r linux-x64 -o ./aot-sample
         ./aot-sample/Mediator.AotSample
 
