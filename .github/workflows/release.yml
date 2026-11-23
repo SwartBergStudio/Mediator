@@ -96,7 +96,7 @@ jobs:
 
     # Runs after packing: publishing the sample rebuilds the library, and the packages must contain the
     # assemblies from the versioned Build step. The same version properties keep the rebuild identical anyway.
-    # Native AOT links against zlib; the ubuntu-26.04 image ships clang but not zlib1g-dev.
+    # Native AOT links against zlib. The image has it today; installing it keeps the step independent of the image contents.
     - name: Install Native AOT prerequisites
       run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zlib1g-dev
 
