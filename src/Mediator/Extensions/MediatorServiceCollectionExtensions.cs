@@ -61,6 +61,8 @@ public static class MediatorServiceCollectionExtensions
         services.TryAddSingleton<INotificationPublisher, NotificationPublisher>();
         // Starts the publisher with the host (recovering stored notifications) and drains it on shutdown.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<Microsoft.Extensions.Hosting.IHostedService, NotificationPublisherLifetime>());
+        // Runs the handlers of notifications received from a broker (see AddNotificationTransport).
+        services.TryAddSingleton<INotificationDispatcher, NotificationDispatcher>();
         services.TryAddTransient<IStreamRequestDispatcher, StreamRequestDispatcher>();
         services.TryAddTransient<IMediator, Core.Mediator>();
 
@@ -76,6 +78,39 @@ public static class MediatorServiceCollectionExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// Publishes notifications through a message broker instead of the in-process background queue: <c>Publish</c> hands
+    /// each notification to <typeparamref name="TTransport"/>, and the broker's consumer runs the handlers through
+    /// <see cref="INotificationDispatcher"/>. Works before or after <c>AddMediator</c>.
+    /// </summary>
+    /// <remarks>
+    /// Notifications are serialized with the registered <see cref="INotificationSerializer"/>. When none is registered,
+    /// <see cref="JsonNotificationSerializer"/> with reflection is used; Native AOT apps should register one built from a
+    /// source-generated <c>JsonSerializerContext</c> first. <see cref="MediatorOptions.EnablePersistence"/> is ignored: the
+    /// broker stores the notifications.
+    /// </remarks>
+    /// <typeparam name="TTransport">The transport, registered as a singleton.</typeparam>
+    public static IServiceCollection AddNotificationTransport<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TTransport>(this IServiceCollection services)
+        where TTransport : class, INotificationTransport
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.RemoveAll<INotificationTransport>();
+        services.AddSingleton<INotificationTransport, TTransport>();
+        // Replaces the in-process publisher whether AddMediator ran before this or runs after it (it only TryAdds).
+        services.RemoveAll<INotificationPublisher>();
+        services.AddSingleton<INotificationPublisher, TransportNotificationPublisher>();
+        AddDefaultSerializer(services);
+        return services;
+    }
+
+    [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+        Justification = "Only used when no serializer was registered. Native AOT apps should register a JsonNotificationSerializer built from a source-generated JsonSerializerContext before calling AddNotificationTransport.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+        Justification = "Only used when no serializer was registered. Native AOT apps should register a JsonNotificationSerializer built from a source-generated JsonSerializerContext before calling AddNotificationTransport.")]
+    private static void AddDefaultSerializer(IServiceCollection services)
+        => services.TryAddSingleton<INotificationSerializer>(static _ => new JsonNotificationSerializer());
 
     [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
         Justification = "Persistence is opt-in. Native AOT apps should register a JsonNotificationSerializer built from a source-generated JsonSerializerContext before calling AddMediator.")]

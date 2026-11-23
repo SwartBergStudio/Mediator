@@ -6,3 +6,4 @@ global using Microsoft.Extensions.DependencyInjection;
 global using Mediator.Core;
 global using Mediator.Persistence;
 global using Mediator.Serialization;
+global using Mediator.Transport;
