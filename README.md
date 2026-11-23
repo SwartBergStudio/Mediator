@@ -52,6 +52,9 @@ dotnet add package SwartBerg.Mediator
 
 # Optional: Native AOT / trimming support
 dotnet add package SwartBerg.Mediator.SourceGenerator
+
+# Optional: publish notifications through Azure Service Bus
+dotnet add package SwartBerg.Mediator.AzureServiceBus
 ```
 
 `dotnet add package` installs the latest version. To pin a version in the project file, use the version from the badge above:
