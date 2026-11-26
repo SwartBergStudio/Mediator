@@ -17,7 +17,9 @@ namespace Mediator.Tests
             var generated = new ServiceCollection().AddMediatorHandlers();
 
             HandlerPairs(generated).Should().BeEquivalentTo(HandlerPairs(scanned));
-            generated.Where(d => IsMediatorInterface(d.ServiceType)).Should().OnlyContain(d => d.Lifetime == ServiceLifetime.Transient);
+            // Transient unless [MediatorHandlerLifetime] says otherwise: those descriptors resolve the handler class
+            // through a factory, so they have no implementation type (see HandlerLifetimeTests).
+            generated.Where(d => IsMediatorInterface(d.ServiceType) && d.ImplementationType is not null).Should().OnlyContain(d => d.Lifetime == ServiceLifetime.Transient);
         }
 
         [Fact]

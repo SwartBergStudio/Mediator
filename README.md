@@ -382,6 +382,39 @@ Delivery is **at least once**. If the app stops between sending a retry and comp
 - Register it with `services.AddNotificationTransport<MyTransport>()`.
 - Your consumer passes received envelopes to `INotificationDispatcher.DispatchAsync`. The result tells it how to settle the message: succeeded, failed handlers to retry, or poison.
 
+## Handler lifetimes
+
+Handlers are **transient** by default: a new handler object for every message. That suits web apps, where handlers use scoped services such as a `DbContext`.
+
+To change it, use `[MediatorHandlerLifetime]`. Assembly scanning and the source generator both read it:
+
+```csharp
+using Mediator;
+using Microsoft.Extensions.DependencyInjection;
+
+// One handler:
+[MediatorHandlerLifetime(ServiceLifetime.Singleton)]
+public sealed class ScoreBoard : INotificationHandler<UnitDied>, INotificationHandler<BuildingCompleted>
+{
+    private int _score; // kept between messages: there is only one ScoreBoard
+
+    public Task Handle(UnitDied notification, CancellationToken cancellationToken) { _score += 10; return Task.CompletedTask; }
+    public Task Handle(BuildingCompleted notification, CancellationToken cancellationToken) { _score += 50; return Task.CompletedTask; }
+}
+
+// Or every handler in the assembly (a class's own attribute wins):
+[assembly: MediatorHandlerLifetime(ServiceLifetime.Singleton)]
+```
+
+- A singleton (or scoped) handler class is **one object** for all the handler interfaces it implements.
+- Pipeline behaviors are not affected.
+- With singleton handlers that finish synchronously, `PublishAndWait` allocates nothing, also for a `struct` notification. That makes it usable in a game loop or another hot path.
+
+Two things to know before making a handler a singleton:
+
+- **It must be thread-safe if its notifications are sent with `Publish`.** Background workers run handlers at the same time. `PublishAndWait` runs them one after another on the caller.
+- **It must not depend on scoped services.** A singleton keeps the first `DbContext` (or user session) it is given for the life of the app. Build the container with `ValidateScopes = true` during development to catch this.
+
 ## Native AOT and Trimming
 
 `AddMediator(assemblies)` discovers handlers with reflection. Trimming can remove handlers it never sees referenced, so in trimmed or Native AOT apps (for example published MAUI iOS/Android apps or Native AOT APIs) use the source generator instead:

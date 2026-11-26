@@ -45,6 +45,19 @@ namespace Mediator.Tests
             BytesPerCall(() => mediator.CreateStream(request)).Should().Be(0);
         }
 
+        [Fact]
+        public void PublishAndWait_SingletonHandlers_ShouldNotAllocate()
+        {
+            using var provider = Build();
+            var mediator = provider.GetRequiredService<IMediator>();
+            var structNotification = new ZeroAllocEvent(7);
+            var classNotification = new ZeroAllocClassEvent();
+
+            BytesPerCall(() => mediator.PublishAndWait(structNotification)).Should().Be(0, "a struct notification is not boxed and three singleton handlers that return a completed task need no state machine");
+            BytesPerCall(() => mediator.PublishAndWait(classNotification)).Should().Be(0);
+            ZeroAllocEventHandlerA.Sum.Should().BeGreaterThan(0, "the handlers ran");
+        }
+
         /// <summary>Warms up, then measures the average bytes allocated per call on this thread.</summary>
         private static long BytesPerCall(Func<object> call)
         {
@@ -62,6 +75,10 @@ namespace Mediator.Tests
             services.AddSingleton<IRequestHandler<ZeroAllocRequest, int>, ZeroAllocRequestHandler>();
             services.AddSingleton<IRequestHandler<ZeroAllocCommand>, ZeroAllocCommandHandler>();
             services.AddSingleton<IStreamRequestHandler<ZeroAllocStream, int>, ZeroAllocStreamHandler>();
+            services.AddSingleton<INotificationHandler<ZeroAllocEvent>, ZeroAllocEventHandlerA>();
+            services.AddSingleton<INotificationHandler<ZeroAllocEvent>, ZeroAllocEventHandlerB>();
+            services.AddSingleton<INotificationHandler<ZeroAllocEvent>, ZeroAllocEventHandlerC>();
+            services.AddSingleton<INotificationHandler<ZeroAllocClassEvent>, ZeroAllocClassEventHandler>();
             services.AddMediator(options => options.NotificationWorkerCount = 1);
             return services.BuildServiceProvider();
         }
@@ -78,6 +95,36 @@ namespace Mediator.Tests
         public sealed class ZeroAllocCommandHandler : IRequestHandler<ZeroAllocCommand>
         {
             public Task Handle(ZeroAllocCommand request, CancellationToken cancellationToken) => Task.CompletedTask;
+        }
+
+        public readonly record struct ZeroAllocEvent(int Id) : INotification;
+
+        public sealed class ZeroAllocEventHandlerA : INotificationHandler<ZeroAllocEvent>
+        {
+            public static long Sum;
+
+            public Task Handle(ZeroAllocEvent notification, CancellationToken cancellationToken)
+            {
+                Sum += notification.Id;
+                return Task.CompletedTask;
+            }
+        }
+
+        public sealed class ZeroAllocEventHandlerB : INotificationHandler<ZeroAllocEvent>
+        {
+            public Task Handle(ZeroAllocEvent notification, CancellationToken cancellationToken) => Task.CompletedTask;
+        }
+
+        public sealed class ZeroAllocEventHandlerC : INotificationHandler<ZeroAllocEvent>
+        {
+            public Task Handle(ZeroAllocEvent notification, CancellationToken cancellationToken) => Task.CompletedTask;
+        }
+
+        public sealed class ZeroAllocClassEvent : INotification;
+
+        public sealed class ZeroAllocClassEventHandler : INotificationHandler<ZeroAllocClassEvent>
+        {
+            public Task Handle(ZeroAllocClassEvent notification, CancellationToken cancellationToken) => Task.CompletedTask;
         }
 
         public sealed class ZeroAllocStream : IStreamRequest<int>;

@@ -39,6 +39,8 @@ public static class MediatorRegistry
     /// <summary>
     /// Adds handler registrations, skipping any (service, implementation) pair that is already registered.
     /// Matches the de-duplication behaviour of assembly scanning so generated and reflection registrations can be mixed.
+    /// A descriptor with an implementation type and a singleton or scoped lifetime is registered so that the class is
+    /// one object for every handler interface it implements (see <see cref="MediatorHandlerLifetimeAttribute"/>).
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <param name="descriptors">Handler descriptors to add.</param>
@@ -50,9 +52,15 @@ public static class MediatorRegistry
         var existing = HandlerRegistrations.CollectExisting(services);
         foreach (var descriptor in descriptors)
         {
-            if (descriptor.ImplementationType is null || existing.Add((descriptor.ServiceType, descriptor.ImplementationType)))
+            if (descriptor.ImplementationType is null)
             {
                 services.Add(descriptor);
+            }
+            else
+            {
+                // Same rules as scanning: de-duplicated, and a singleton or scoped handler class is one object for
+                // all the handler interfaces it implements.
+                HandlerRegistrations.AddHandler(services, existing, descriptor.ServiceType, descriptor.ImplementationType, descriptor.Lifetime);
             }
         }
         return services;

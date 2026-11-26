@@ -45,7 +45,7 @@ internal sealed class Mediator(IServiceProvider serviceProvider) : IMediator
         where TNotification : INotification
     {
         _continueOnCapturedContext ??= !(serviceProvider.GetService<IOptions<MediatorOptions>>()?.Value.UseConfigureAwaitGlobally ?? true);
-        return Dispatch.PublishAndWait(notification, serviceProvider, _continueOnCapturedContext.Value, cancellationToken);
+        return Dispatch.PublishAndWait<TNotification>(notification, serviceProvider, _continueOnCapturedContext.Value, cancellationToken);
     }
 
     /// <summary>

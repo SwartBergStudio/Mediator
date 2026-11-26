@@ -61,6 +61,49 @@ internal static class Dispatch
     /// Invokes the notification's handlers sequentially in the given scope. The first failure stops the sequence and
     /// is returned through the task.
     /// </summary>
+    /// <summary>
+    /// Statically typed entry: when <typeparamref name="TNotification"/> is the notification's runtime type (always so
+    /// for a struct), handlers are resolved and called through the typed interface, so a struct notification is never
+    /// boxed and synchronous handlers cost no allocation. Otherwise the runtime type decides, as before.
+    /// </summary>
+    public static Task PublishAndWait<TNotification>(TNotification notification, IServiceProvider serviceProvider, bool continueOnCapturedContext, CancellationToken cancellationToken)
+        where TNotification : INotification
+    {
+        if (notification is null)
+            return Task.FromException(new ArgumentNullException(nameof(notification)));
+
+        // typeof(T).IsValueType is a JIT-time constant, so GetType() (which would box a struct) only runs for classes.
+        if (MediatorTelemetry.IsEnabled || (!typeof(TNotification).IsValueType && notification.GetType() != typeof(TNotification)))
+            return PublishAndWait((INotification)notification, serviceProvider, continueOnCapturedContext, cancellationToken);
+
+        try
+        {
+            var handlers = HandlerResolution.ResolveAll<INotificationHandler<TNotification>>(serviceProvider);
+            for (var i = 0; i < handlers.Length; i++)
+            {
+                var task = handlers[i].Handle(notification, cancellationToken);
+                if (!task.IsCompletedSuccessfully)
+                    return AwaitThenInvokeRest(task, handlers, i + 1, notification, continueOnCapturedContext, cancellationToken);
+            }
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+    }
+
+    /// <summary>The asynchronous tail of the typed path: awaits the pending handler, then runs the remaining ones in order.</summary>
+    private static async Task AwaitThenInvokeRest<TNotification>(Task pending, INotificationHandler<TNotification>[] handlers, int next, TNotification notification, bool continueOnCapturedContext, CancellationToken cancellationToken)
+        where TNotification : INotification
+    {
+        await pending.ConfigureAwait(continueOnCapturedContext);
+        for (var i = next; i < handlers.Length; i++)
+        {
+            await handlers[i].Handle(notification, cancellationToken).ConfigureAwait(continueOnCapturedContext);
+        }
+    }
+
     public static Task PublishAndWait(INotification notification, IServiceProvider serviceProvider, bool continueOnCapturedContext, CancellationToken cancellationToken)
     {
         if (notification is null)

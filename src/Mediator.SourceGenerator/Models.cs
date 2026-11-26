@@ -19,7 +19,8 @@ internal enum HandlerKind
 
 /// <summary>
 /// One handler interface implemented by a class. All members are strings so the model is cache-friendly
-/// for the incremental pipeline.
+/// for the incremental pipeline. <c>Lifetime</c> is the name of the <c>ServiceDescriptor</c> factory method to emit:
+/// Transient, Scoped or Singleton.
 /// </summary>
 internal sealed record HandlerRegistration(
     HandlerKind Kind,
@@ -27,7 +28,8 @@ internal sealed record HandlerRegistration(
     string ImplementationType,
     string MessageType,
     string? ResponseType,
-    int Order = -1);
+    int Order = -1,
+    string Lifetime = "Transient");
 
 /// <summary>
 /// Equatable location used to report diagnostics without holding on to syntax trees.

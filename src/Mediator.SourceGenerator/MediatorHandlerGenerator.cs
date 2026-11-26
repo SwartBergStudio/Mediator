@@ -28,6 +28,8 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
     internal const string MediatorAssembly = "Mediator";
     private const string ClassName = "MediatorHandlerRegistrations";
 
+    private const string LifetimeAttributeName = "Mediator.MediatorHandlerLifetimeAttribute";
+
     private static readonly Dictionary<string, HandlerKind> s_handlerInterfaces = new()
     {
         ["IRequestHandler`2"] = HandlerKind.Request,
@@ -128,6 +130,7 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
         var implementation = FullName(type);
         var registrations = ImmutableArray.CreateBuilder<HandlerRegistration>();
         var declaredBehaviors = BehaviorDeclarations.Read(context.SemanticModel.Compilation).Declarations;
+        var lifetime = HandlerLifetime(type, context.SemanticModel.Compilation);
 
         foreach (var handlerInterface in handlerInterfaces)
         {
@@ -137,7 +140,8 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
                 FullName(handlerInterface),
                 implementation,
                 FullName(handlerInterface.TypeArguments[0]),
-                handlerInterface.TypeArguments.Length > 1 ? FullName(handlerInterface.TypeArguments[1]) : null));
+                handlerInterface.TypeArguments.Length > 1 ? FullName(handlerInterface.TypeArguments[1]) : null,
+                Lifetime: lifetime));
 
             // Close open behaviors declared with [assembly: MediatorPipelineBehaviors(...)] over this request.
             foreach (var declaration in declaredBehaviors)
@@ -231,7 +235,7 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
             sb.AppendLine("            {");
             foreach (var r in registrations)
             {
-                sb.AppendLine($"                {Descriptor}.Transient(typeof({r.ServiceType}), typeof({r.ImplementationType})),");
+                sb.AppendLine($"                {Descriptor}.{r.Lifetime}(typeof({r.ServiceType}), typeof({r.ImplementationType})),");
             }
             sb.AppendLine("            });");
             sb.AppendLine();
@@ -264,6 +268,34 @@ public sealed class MediatorHandlerGenerator : IIncrementalGenerator
         HandlerKind.StreamRequest => $"RegisterStreamRequest<{r.MessageType}, {r.ResponseType}>();",
         _ => null, // Behaviors are resolved by the request's dispatcher; they need no dispatcher of their own.
     };
+
+    /// <summary>
+    /// The lifetime from <c>[MediatorHandlerLifetime]</c> on the handler class, else on the assembly, else Transient.
+    /// Returned as the name of the <c>ServiceDescriptor</c> factory method. Mirrors the reflection scan.
+    /// </summary>
+    private static string HandlerLifetime(INamedTypeSymbol type, Compilation compilation)
+    {
+        var attributeType = compilation.GetTypeByMetadataName(LifetimeAttributeName);
+        if (attributeType is null)
+            return "Transient"; // an older SwartBerg.Mediator without the attribute
+
+        return Read(type.GetAttributes()) ?? Read(compilation.Assembly.GetAttributes()) ?? "Transient";
+
+        string? Read(ImmutableArray<AttributeData> attributes)
+        {
+            foreach (var attribute in attributes)
+            {
+                if (SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, attributeType) &&
+                    attribute.ConstructorArguments.Length == 1 &&
+                    attribute.ConstructorArguments[0].Value is int value)
+                {
+                    // Microsoft.Extensions.DependencyInjection.ServiceLifetime: Singleton = 0, Scoped = 1, Transient = 2.
+                    return value switch { 0 => "Singleton", 1 => "Scoped", _ => "Transient" };
+                }
+            }
+            return null;
+        }
+    }
 
     internal static bool IsHandlerInterface(INamedTypeSymbol type)
         => s_handlerInterfaces.ContainsKey(type.OriginalDefinition.MetadataName) && IsMediatorType(type.OriginalDefinition);

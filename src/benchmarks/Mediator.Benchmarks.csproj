@@ -2,7 +2,8 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net11.0</TargetFramework>
+    <!-- net10.0, not net11.0: BenchmarkDotNet 0.15.8 (latest stable) stops with "GetRuntimeVersion not implemented" on .NET 11. Move up when it supports it. -->
+    <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
   </PropertyGroup>

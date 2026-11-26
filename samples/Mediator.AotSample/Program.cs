@@ -76,6 +76,11 @@ using (var provider = services.BuildServiceProvider())
         Check(tracker.Events.Contains("approved:7:by:erin"), "PublishAndWait ran the handler before returning, in the caller's scope");
     }
 
+    await mediator.PublishAndWait(new ScoreChanged(2));
+    await mediator.PublishAndWait(new ScoreChanged(3));
+    var scoreBoards = provider.GetServices<INotificationHandler<ScoreChanged>>().ToArray();
+    Check(scoreBoards.Length == 1 && scoreBoards[0] is ScoreBoard { Total: 5 }, "[MediatorHandlerLifetime(Singleton)]: one handler object kept its state across two publishes of a struct notification");
+
     var streamed = new List<int>();
     await foreach (var i in mediator.CreateStream(new CountTo(3)))
     {

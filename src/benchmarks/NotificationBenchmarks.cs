@@ -123,4 +123,68 @@ namespace Mediator.Benchmarks
             return Task.CompletedTask;
         }
     }
+
+    /// <summary>
+    /// PublishAndWait of a struct notification to three synchronous handlers: transient handlers (the default) against
+    /// singleton handlers, which allocate nothing.
+    /// </summary>
+    [MemoryDiagnoser]
+    [SimpleJob]
+    public class PublishAndWaitBenchmarks
+    {
+        private ServiceProvider? _transientProvider;
+        private ServiceProvider? _singletonProvider;
+        private IMediator? _transient;
+        private IMediator? _singleton;
+
+        [GlobalSetup]
+        public void Setup()
+        {
+            _transientProvider = Build(ServiceLifetime.Transient);
+            _singletonProvider = Build(ServiceLifetime.Singleton);
+            _transient = _transientProvider.GetRequiredService<IMediator>();
+            _singleton = _singletonProvider.GetRequiredService<IMediator>();
+        }
+
+        [GlobalCleanup]
+        public void Cleanup()
+        {
+            _transientProvider?.Dispose();
+            _singletonProvider?.Dispose();
+        }
+
+        [Benchmark(Baseline = true)]
+        public Task TransientHandlers() => _transient!.PublishAndWait(new Scored(1));
+
+        [Benchmark]
+        public Task SingletonHandlers() => _singleton!.PublishAndWait(new Scored(1));
+
+        private static ServiceProvider Build(ServiceLifetime lifetime)
+        {
+            IServiceCollection services = new ServiceCollection();
+            services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Error));
+            services.Add(new ServiceDescriptor(typeof(INotificationHandler<Scored>), typeof(ScoredHandlerA), lifetime));
+            services.Add(new ServiceDescriptor(typeof(INotificationHandler<Scored>), typeof(ScoredHandlerB), lifetime));
+            services.Add(new ServiceDescriptor(typeof(INotificationHandler<Scored>), typeof(ScoredHandlerC), lifetime));
+            services.AddMediatorCore(options => options.NotificationWorkerCount = 1);
+            return services.BuildServiceProvider();
+        }
+
+        public readonly record struct Scored(int Points) : INotification;
+
+        public sealed class ScoredHandlerA : INotificationHandler<Scored>
+        {
+            public Task Handle(Scored notification, CancellationToken cancellationToken) => Task.CompletedTask;
+        }
+
+        public sealed class ScoredHandlerB : INotificationHandler<Scored>
+        {
+            public Task Handle(Scored notification, CancellationToken cancellationToken) => Task.CompletedTask;
+        }
+
+        public sealed class ScoredHandlerC : INotificationHandler<Scored>
+        {
+            public Task Handle(Scored notification, CancellationToken cancellationToken) => Task.CompletedTask;
+        }
+    }
 }

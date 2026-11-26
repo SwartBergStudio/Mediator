@@ -5,6 +5,24 @@ All notable changes to SwartBerg.Mediator, SwartBerg.Mediator.SourceGenerator an
 ## Unreleased
 
 ### Added
+- **`[MediatorHandlerLifetime]`: choose a handler's DI lifetime.** Handlers are transient by default, and that does not change. Put `[MediatorHandlerLifetime(ServiceLifetime.Singleton)]` (or `Scoped`) on a handler class, or `[assembly: MediatorHandlerLifetime(...)]` for every handler in an assembly; an attribute on the class wins over the one on the assembly.
+  - Assembly scanning (`AddMediator(assemblies)`) and the source generator (`AddMediatorHandlers()`) read it and register the same thing.
+  - A singleton or scoped handler class is **one object** for every handler interface it implements, so a class that handles several messages can keep state across them.
+  - Pipeline behaviors are not affected; they stay transient.
+  - A singleton handler must be thread-safe if its notifications go through `Publish` (background workers run handlers at the same time), and must not depend on scoped services.
+  - Needs the generator of the same version: an older generator ignores the attribute and registers transient.
+
+### Performance
+- **`PublishAndWait` no longer boxes a struct notification**, and with singleton handlers that complete synchronously it allocates nothing: 0 bytes per call, down from 24 for the box plus one object per transient handler (240 bytes measured for a struct notification with three transient handlers). `PublishAndWait<TNotification>` now calls the handlers through the typed interface when `TNotification` is the notification's own type; a notification passed as a base type still runs the handlers of its runtime type, as before. A test fails if the allocation returns.
+
+### Build
+- **Analyzer release tracking corrected.** MEDGEN001 to MEDGEN006 (shipped in 3.1.0) and MEDGEN007 (shipped in 4.0.0) were still listed as unshipped; they are now in `AnalyzerReleases.Shipped.md`.
+- **This file:** the 4.1.0 notes were still under "Unreleased" after 4.1.0 was published; they now have their heading.
+- **Benchmarks run again.** The benchmark project went to `net11.0` in 4.1.0, which BenchmarkDotNet 0.15.8 cannot run ("GetRuntimeVersion not implemented"), and `local-build` still asked for `net10.0`. It targets `net10.0` again. New `PublishAndWaitBenchmarks`: transient against singleton handlers.
+
+## 4.1.0
+
+### Added
 - **Azure Service Bus transport (new package `SwartBerg.Mediator.AzureServiceBus`).** `AddMediatorAzureServiceBus(...)` makes `Publish` send notifications to a Service Bus queue or topic. A hosted processor receives them and runs the handlers. A failed handler is retried alone, through a scheduled message with the usual backoff. Once `MaxRetryAttempts` is reached, the message is dead-lettered with the failed handlers named, rather than dropped. Poison messages are dead-lettered at once. See the README section "Notifications over a message broker".
 - **A transport seam for message brokers**, in the core package:
   - `INotificationTransport`, registered with `AddNotificationTransport<T>()`, replaces the in-process queue on the publishing side.

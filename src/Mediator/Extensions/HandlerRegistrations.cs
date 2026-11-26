@@ -37,12 +37,67 @@ internal static class HandlerRegistrations
             {
                 existing.Add((descriptor.ServiceType, descriptor.ImplementationType));
             }
+            else if (descriptor.ImplementationFactory?.Target is HandlerForwarder forwarder)
+            {
+                // A singleton or scoped handler added by AddHandler below: its descriptor has no implementation type.
+                existing.Add((descriptor.ServiceType, forwarder.ImplementationType));
+            }
         }
         return existing;
     }
 
     /// <summary>
-    /// Scans the assemblies for closed handler implementations and registers them as transient services, then applies
+    /// Registers one handler unless the (service, implementation) pair is already registered. A transient handler is a
+    /// plain descriptor. A singleton or scoped handler class is registered once as itself, and each of its handler
+    /// interfaces resolves to that registration, so a class that handles several messages is one object, not one per
+    /// interface.
+    /// </summary>
+    public static void AddHandler(
+        IServiceCollection services,
+        HashSet<(Type Service, Type Implementation)> existing,
+        Type serviceType,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type implementationType,
+        ServiceLifetime lifetime)
+    {
+        if (!existing.Add((serviceType, implementationType)))
+            return;
+
+        if (lifetime == ServiceLifetime.Transient)
+        {
+            services.Add(new ServiceDescriptor(serviceType, implementationType, lifetime));
+            return;
+        }
+
+        if (!IsRegistered(services, implementationType))
+            services.Add(new ServiceDescriptor(implementationType, implementationType, lifetime));
+
+        services.Add(new ServiceDescriptor(serviceType, new HandlerForwarder(implementationType).Resolve, lifetime));
+    }
+
+    private static bool IsRegistered(IServiceCollection services, Type serviceType)
+    {
+        foreach (var descriptor in services)
+        {
+            if (descriptor.ServiceType == serviceType && !descriptor.IsKeyedService)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves a handler interface to the registration of its implementation class. A named class rather than a lambda
+    /// so that <see cref="CollectExisting"/> can read the implementation type back from the descriptor's factory.
+    /// </summary>
+    private sealed class HandlerForwarder(Type implementationType)
+    {
+        public Type ImplementationType { get; } = implementationType;
+
+        public object Resolve(IServiceProvider serviceProvider) => serviceProvider.GetRequiredService(ImplementationType);
+    }
+
+    /// <summary>
+    /// Scans the assemblies for closed handler implementations and registers them (transient unless
+    /// <see cref="MediatorHandlerLifetimeAttribute"/> on the class or its assembly says otherwise), then applies
     /// the assembly's <see cref="MediatorPipelineBehaviorsAttribute"/> to the requests handled in it.
     /// </summary>
     [RequiresUnreferencedCode("Assembly scanning discovers handler types via reflection; handlers may be trimmed. Use the SwartBerg.Mediator.SourceGenerator package for trimmed or Native AOT apps.")]
@@ -57,6 +112,7 @@ internal static class HandlerRegistrations
         {
             var requestHandlers = new List<Type>();
             var declaredBehaviors = assembly.GetCustomAttribute<MediatorPipelineBehaviorsAttribute>()?.BehaviorTypes ?? Array.Empty<Type>();
+            var assemblyLifetime = assembly.GetCustomAttribute<MediatorHandlerLifetimeAttribute>()?.Lifetime ?? ServiceLifetime.Transient;
 
             foreach (var type in GetLoadableTypes(assembly))
             {
@@ -65,18 +121,22 @@ internal static class HandlerRegistrations
                 if (!type.IsClass || type.IsAbstract || type.ContainsGenericParameters)
                     continue;
 
+                ServiceLifetime? lifetime = null;
+
                 foreach (var interfaceType in type.GetInterfaces())
                 {
                     if (!IsHandlerInterface(interfaceType))
                         continue;
+
+                    // Read once per handler class, and only for classes that are handlers.
+                    lifetime ??= type.GetCustomAttribute<MediatorHandlerLifetimeAttribute>(inherit: false)?.Lifetime ?? assemblyLifetime;
 
                     if (IsClosed(interfaceType, typeof(IRequestHandler<,>)) ||
                         IsClosed(interfaceType, typeof(IRequestHandler<>)) ||
                         IsClosed(interfaceType, typeof(IStreamRequestHandler<,>)))
                         requestHandlers.Add(interfaceType);
 
-                    if (existing.Add((interfaceType, type)))
-                        services.AddTransient(interfaceType, type);
+                    AddHandler(services, existing, interfaceType, type, lifetime.Value);
                 }
             }
 

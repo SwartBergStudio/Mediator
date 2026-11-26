@@ -324,6 +324,115 @@ public class MediatorHandlerGeneratorTests
         driver.GetRunResult().GeneratedTrees.Should().BeEmpty();
     }
 
+    private const string LifetimeMessages = """
+        using System.Threading;
+        using System.Threading.Tasks;
+        using Mediator;
+        using Microsoft.Extensions.DependencyInjection;
+        ASSEMBLY_ATTRIBUTE
+        namespace App;
+
+        public sealed class Happened : INotification;
+        public sealed class Other : INotification;
+        public sealed record Ping(string Text) : IRequest<string>;
+
+        public sealed class PlainHandler : INotificationHandler<Happened>
+        {
+            public Task Handle(Happened notification, CancellationToken cancellationToken) => Task.CompletedTask;
+        }
+
+        [MediatorHandlerLifetime(ServiceLifetime.Singleton)]
+        public sealed class SingletonHandler : INotificationHandler<Happened>, INotificationHandler<Other>
+        {
+            public Task Handle(Happened notification, CancellationToken cancellationToken) => Task.CompletedTask;
+            public Task Handle(Other notification, CancellationToken cancellationToken) => Task.CompletedTask;
+        }
+
+        [MediatorHandlerLifetime(ServiceLifetime.Scoped)]
+        public sealed class ScopedHandler : IRequestHandler<Ping, string>
+        {
+            public Task<string> Handle(Ping request, CancellationToken cancellationToken) => Task.FromResult(request.Text);
+        }
+
+        [MediatorHandlerLifetime(ServiceLifetime.Transient)]
+        public sealed class ExplicitTransientHandler : INotificationHandler<Other>
+        {
+            public Task Handle(Other notification, CancellationToken cancellationToken) => Task.CompletedTask;
+        }
+
+        public sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse>
+        {
+            public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken) => next();
+        }
+        """;
+
+    private const string Happened = "global::Mediator.INotificationHandler<global::App.Happened>";
+    private const string Other = "global::Mediator.INotificationHandler<global::App.Other>";
+    private const string PingHandlerService = "global::Mediator.IRequestHandler<global::App.Ping, string>";
+
+    [Fact]
+    public void Lifetime_attribute_on_a_handler_class_sets_that_handlers_lifetime_only()
+    {
+        var (output, diagnostics, generated) = Run(LifetimeMessages.Replace("ASSEMBLY_ATTRIBUTE", ""));
+
+        diagnostics.Should().BeEmpty();
+        output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
+
+        Registered(generated, Happened, "Singleton").Should().Equal("global::App.SingletonHandler");
+        Registered(generated, Other, "Singleton").Should().Equal("global::App.SingletonHandler");
+        Registered(generated, PingHandlerService, "Scoped").Should().Equal("global::App.ScopedHandler");
+        Registered(generated, Happened).Should().Equal(new[] { "global::App.PlainHandler" }, "a handler without the attribute stays transient");
+        Registered(generated, Other).Should().Equal("global::App.ExplicitTransientHandler");
+    }
+
+    [Fact]
+    public void Lifetime_attribute_on_the_assembly_applies_to_handlers_without_their_own_and_never_to_behaviors()
+    {
+        var (output, diagnostics, generated) = Run(LifetimeMessages.Replace("ASSEMBLY_ATTRIBUTE",
+            "[assembly: MediatorHandlerLifetime(ServiceLifetime.Singleton)]\n[assembly: MediatorPipelineBehaviors(typeof(App.LoggingBehavior<,>))]"));
+
+        diagnostics.Should().BeEmpty();
+        output.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Should().BeEmpty();
+
+        Registered(generated, Happened, "Singleton").Should().BeEquivalentTo("global::App.PlainHandler", "global::App.SingletonHandler");
+        Registered(generated, Happened).Should().BeEmpty();
+        Registered(generated, PingHandlerService, "Scoped").Should().Equal(new[] { "global::App.ScopedHandler" }, "the class attribute wins over the assembly attribute");
+        Registered(generated, Other).Should().Equal(new[] { "global::App.ExplicitTransientHandler" }, "the class attribute wins over the assembly attribute");
+        Registered(generated, "global::Mediator.IPipelineBehavior<global::App.Ping, string>").Should().Equal(new[] { "global::App.LoggingBehavior<global::App.Ping, string>" }, "pipeline behaviors stay transient");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("[assembly: MediatorHandlerLifetime(ServiceLifetime.Singleton)]")]
+    [InlineData("[assembly: MediatorHandlerLifetime(ServiceLifetime.Scoped)]")]
+    public void Scanning_and_the_generator_register_the_same_lifetimes(string assemblyAttribute)
+    {
+        var (output, _, _) = Run(LifetimeMessages.Replace("ASSEMBLY_ATTRIBUTE", assemblyAttribute));
+        using var image = new MemoryStream();
+        output.Emit(image).Success.Should().BeTrue();
+        var assembly = System.Reflection.Assembly.Load(image.ToArray());
+
+        var scanned = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        global::Mediator.MediatorServiceCollectionExtensions.AddMediator(scanned, assembly);
+
+        var generated = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        assembly.GetType("App.Root.MediatorHandlerRegistrations", throwOnError: true)!
+            .GetMethod("AddMediatorHandlers")!
+            .Invoke(null, new object[] { generated });
+
+        var expected = assemblyAttribute.Contains("Singleton") ? "Singleton" : assemblyAttribute.Contains("Scoped") ? "Scoped" : "Transient";
+        Lifetimes(scanned).Should().Contain($"INotificationHandler<Happened> {expected}", "PlainHandler has no attribute of its own");
+        Lifetimes(scanned).Should().Contain("INotificationHandler<Happened> Singleton");
+        Lifetimes(scanned).Should().Contain("IRequestHandler<Ping,String> Scoped");
+        Lifetimes(generated).Should().BeEquivalentTo(Lifetimes(scanned));
+
+        static List<string> Lifetimes(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+            => services
+                .Where(d => d.ServiceType.IsGenericType && d.ServiceType.Namespace == "Mediator" && d.ServiceType.Name.Contains("Handler"))
+                .Select(d => $"{d.ServiceType.Name.Split('`')[0]}<{string.Join(",", d.ServiceType.GetGenericArguments().Select(a => a.Name))}> {d.Lifetime}")
+                .ToList();
+    }
+
     private static (Compilation Output, ImmutableArray<Diagnostic> Diagnostics, string Generated) Run(string source)
     {
         var references = BasicReferences()
@@ -357,9 +466,9 @@ public class MediatorHandlerGeneratorTests
         => Messages.Replace("namespace App;", attribute + "\n\nnamespace App;");
 
     /// <summary>Implementation types registered for a service type, in registration order.</summary>
-    private static List<string> Registered(string generated, string serviceType)
+    private static List<string> Registered(string generated, string serviceType, string lifetime = "Transient")
     {
-        var prefix = $"Transient(typeof({serviceType}), typeof(";
+        var prefix = $"{lifetime}(typeof({serviceType}), typeof(";
         return generated.Split('\n')
             .Select(line => line.Trim())
             .Where(line => line.Contains(prefix, StringComparison.Ordinal))

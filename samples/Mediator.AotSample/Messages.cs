@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using Mediator;
+using Microsoft.Extensions.DependencyInjection;
 
 // Behaviors in execution order. Open generic ones are closed per request; closed ones (DoubleNumbers) apply to their own request.
 [assembly: MediatorPipelineBehaviors(
@@ -166,6 +167,22 @@ public sealed class ReportGeneratedHandler(Tracker tracker) : INotificationHandl
     public Task Handle(ReportGenerated notification, CancellationToken cancellationToken)
     {
         tracker.Add($"report:{notification.ReportId}");
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>A struct notification: PublishAndWait does not box it.</summary>
+public readonly record struct ScoreChanged(int Points) : INotification;
+
+/// <summary>Registered as a singleton by the generator because of the attribute, so it keeps its total between notifications.</summary>
+[MediatorHandlerLifetime(ServiceLifetime.Singleton)]
+public sealed class ScoreBoard : INotificationHandler<ScoreChanged>
+{
+    public int Total { get; private set; }
+
+    public Task Handle(ScoreChanged notification, CancellationToken cancellationToken)
+    {
+        Total += notification.Points;
         return Task.CompletedTask;
     }
 }
